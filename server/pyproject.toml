@@ -10,7 +10,9 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "pydantic>=2.9",
+    # docs/schemas/ are generated from these models; pin the minor so schema
+    # generation is reproducible across environments (drift guard in tests)
+    "pydantic>=2.9.2,<2.10",
     "pydantic-settings>=2.6",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
