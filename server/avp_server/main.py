@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -56,6 +57,20 @@ def _startup():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+_DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard():
+    """Vault console: sessions, audit trail, secrets, agents, tokens.
+
+    Static single-file UI; authenticates client-side with the principal token
+    against the same-origin control API, so no CORS and no server session.
+    """
+    with open(_DASHBOARD_PATH, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.exception_handler(StarletteHTTPException)

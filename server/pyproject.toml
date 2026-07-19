@@ -30,3 +30,6 @@ aws = [
 
 [tool.setuptools.packages.find]
 include = ["avp_server*"]
+
+[tool.setuptools.package-data]
+avp_server = ["static/*.html"]

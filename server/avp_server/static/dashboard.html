@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVP · Vault Console</title>
+<style>
+  :root {
+    --bg: #0b0e0c;
+    --bg-raise: #10140f;
+    --line: #1e2a1e;
+    --line-soft: #16201618;
+    --ink: #d6e2d0;
+    --ink-dim: #7d8f79;
+    --ink-faint: #4a5847;
+    --live: #6fe08a;
+    --warn: #e0b25c;
+    --dead: #d96a5f;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  ::selection { background: #24402a; }
+
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .wordmark { font-size: 15px; font-weight: 700; letter-spacing: .18em; }
+  .wordmark em { font-style: normal; color: var(--live); }
+  .crumb { color: var(--ink-faint); letter-spacing: .12em; font-size: 11px; text-transform: uppercase; }
+  #health { margin-left: auto; font-size: 11px; letter-spacing: .1em; color: var(--ink-dim); }
+  #health.ok::before  { content: "● "; color: var(--live); }
+  #health.bad::before { content: "● "; color: var(--dead); }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ---- connect gate ---- */
+  #gate { max-width: 520px; margin: 12vh auto 0; }
+  #gate h1 { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 18px; }
+  #gate p { color: var(--ink-dim); margin-bottom: 18px; }
+  #gate form { display: flex; gap: 8px; }
+  #gate input {
+    flex: 1; background: var(--bg-raise); border: 1px solid var(--line);
+    color: var(--ink); font: inherit; padding: 9px 12px; outline: none;
+  }
+  #gate input:focus { border-color: var(--live); }
+  #gate .err { color: var(--dead); margin-top: 12px; min-height: 1.5em; }
+
+  button {
+    background: none; border: 1px solid var(--line); color: var(--ink);
+    font: inherit; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 8px 14px; cursor: pointer;
+  }
+  button:hover { border-color: var(--ink-dim); }
+  button.primary { border-color: var(--live); color: var(--live); }
+  button.primary:hover { background: #142016; }
+  button.danger { border-color: transparent; color: var(--warn); padding: 2px 8px; }
+  button.danger:hover { border-color: var(--warn); }
+  button.danger.armed { border-color: var(--dead); color: var(--dead); }
+  button.ghost { border-color: transparent; color: var(--ink-faint); padding: 2px 8px; }
+  button.ghost:hover { color: var(--ink); }
+
+  /* ---- console ---- */
+  #console { display: none; }
+  .bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 0; color: var(--ink-faint); font-size: 11px; letter-spacing: .08em;
+  }
+  .bar .spacer { flex: 1; }
+  #banner {
+    display: none; padding: 8px 12px; margin-top: 10px;
+    border: 1px solid var(--dead); color: var(--dead);
+  }
+
+  section { margin-top: 34px; }
+  .sect-head {
+    display: flex; align-items: baseline; gap: 10px;
+    border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 2px;
+  }
+  .sect-head h2 { font-size: 12px; letter-spacing: .2em; text-transform: uppercase; font-weight: 700; }
+  .sect-head .count { color: var(--ink-dim); font-size: 12px; }
+  .sect-head .count b { color: var(--live); font-weight: 400; }
+  .sect-head .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+  select {
+    background: var(--bg-raise); color: var(--ink-dim); border: 1px solid var(--line);
+    font: inherit; font-size: 11px; padding: 3px 6px;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 400; padding: 8px 10px 4px 0;
+  }
+  td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line-soft); vertical-align: top; }
+  tr:hover td { background: var(--bg-raise); }
+  td.num, th.num { font-variant-numeric: tabular-nums; }
+  .id { color: var(--ink-dim); }
+  .muted { color: var(--ink-faint); }
+  .state-active  { color: var(--live); }
+  .state-expired { color: var(--ink-faint); }
+  .state-revoked { color: var(--dead); }
+  .empty td { color: var(--ink-faint); font-style: italic; border-top: 1px solid var(--line-soft); }
+
+  .versions td { background: var(--bg-raise); padding-left: 18px; }
+  .versions .cur { color: var(--live); }
+
+  footer { margin-top: 60px; color: var(--ink-faint); font-size: 11px; letter-spacing: .08em; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="wordmark">AVP<em>▮</em></span>
+  <span class="crumb">vault console</span>
+  <span id="health">checking…</span>
+</header>
+
+<main>
+  <!-- connect gate -->
+  <div id="gate">
+    <h1>Authenticate</h1>
+    <p>Paste your principal token. It is kept in this browser only and sent
+       straight to this server with each request.</p>
+    <form id="gate-form">
+      <input id="gate-token" type="password" placeholder="ptk_…" autocomplete="off" spellcheck="false">
+      <button class="primary" type="submit">Connect</button>
+    </form>
+    <div class="err" id="gate-err"></div>
+  </div>
+
+  <!-- console -->
+  <div id="console">
+    <div class="bar">
+      <span id="wholine"></span>
+      <span class="spacer"></span>
+      <span id="refreshed" class="muted"></span>
+      <button class="ghost" onclick="refreshAll()">Refresh</button>
+      <button class="ghost" onclick="disconnect()">Disconnect</button>
+    </div>
+    <div id="banner"></div>
+
+    <section>
+      <div class="sect-head">
+        <h2>Sessions</h2><span class="count" id="sessions-count"></span>
+        <div class="tools"><button class="ghost" onclick="loadSessions()">↻</button></div>
+      </div>
+      <table id="sessions"><thead><tr>
+        <th>Session</th><th>Agent</th><th>Created</th><th>Expires</th><th>State</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section>
+      <div class="sect-head">
+        <h2>Audit trail</h2><span class="count" id="audit-count"></span>
+        <div class="tools">
+          <select id="audit-filter" onchange="loadAudit()">
+            <option value="">all events</option>
+            <option>session_created</option>
+            <option>session_revoked</option>
+            <option>secret_resolved</option>
+            <option>secret_updated</option>
+            <option>secret_deleted</option>
+            <option>secret_rolled_back</option>
+            <option>proxy_call</option>
+            <option>token_created</option>
+            <option>token_revoked</option>
+            <option>agent_created</option>
+          </select>
+          <button class="ghost" onclick="loadAudit()">↻</button>
+        </div>
+      </div>
+      <table id="audit"><thead><tr>
+        <th>Time</th><th>Event</th><th>Service</th><th>Session</th><th>Detail</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section>
+      <div class="sect-head">
+        <h2>Secrets</h2><span class="count" id="secrets-count"></span>
+        <div class="tools"><button class="ghost" onclick="loadSecrets()">↻</button></div>
+      </div>
+      <table id="secrets"><thead><tr>
+        <th>Service</th><th>Label</th><th>Env</th><th>Updated</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section>
+      <div class="sect-head">
+        <h2>Agents</h2><span class="count" id="agents-count"></span>
+        <div class="tools"><button class="ghost" onclick="loadAgents()">↻</button></div>
+      </div>
+      <table id="agents"><thead><tr>
+        <th>Agent</th><th>Name</th><th>Created</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section>
+      <div class="sect-head">
+        <h2>API tokens</h2><span class="count" id="tokens-count"></span>
+        <div class="tools"><button class="ghost" onclick="loadTokens()">↻</button></div>
+      </div>
+      <table id="tokens"><thead><tr>
+        <th class="num">#</th><th>Type</th><th>Agent</th><th>Created</th><th>State</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <footer>Agent Vault Protocol · revocations take effect immediately · token values are never retrievable</footer>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const store = { get token() { return localStorage.getItem("avp_token") || ""; },
+                set token(v) { v ? localStorage.setItem("avp_token", v) : localStorage.removeItem("avp_token"); } };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: { "Authorization": "Bearer " + store.token,
+               ...(opts.body ? { "Content-Type": "application/json" } : {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401) { disconnect("Token rejected — reconnect with a valid principal token."); throw new Error("unauthorized"); }
+  if (!res.ok) {
+    let msg = "HTTP " + res.status;
+    try { const d = await res.json(); msg += " — " + (d.message || d.detail || JSON.stringify(d)); } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function banner(msg) {
+  const b = $("banner");
+  if (!msg) { b.style.display = "none"; return; }
+  b.textContent = msg;
+  b.style.display = "block";
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toISOString().replace("T", " ").slice(0, 19) + "Z";
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+function fill(tableId, rowsHtml, emptyMsg, cols) {
+  $(tableId).querySelector("tbody").innerHTML =
+    rowsHtml.length ? rowsHtml.join("") : `<tr class="empty"><td colspan="${cols}">${emptyMsg}</td></tr>`;
+}
+function loadingRow(tableId, cols) {
+  $(tableId).querySelector("tbody").innerHTML = `<tr class="empty"><td colspan="${cols}">loading…</td></tr>`;
+}
+
+/* Two-step destructive confirm: first click arms for 3s, second click fires. */
+function armOrFire(btn, fire) {
+  if (btn.classList.contains("armed")) { fire(); return; }
+  const label = btn.textContent;
+  btn.classList.add("armed");
+  btn.textContent = "confirm?";
+  setTimeout(() => { btn.classList.remove("armed"); btn.textContent = label; }, 3000);
+}
+
+function sessionState(s) {
+  if (s.revoked_at) return "revoked";
+  if (new Date(s.expires_at) <= new Date()) return "expired";
+  return "active";
+}
+
+async function loadSessions() {
+  loadingRow("sessions", 6);
+  const rows = await api("/sessions");
+  let active = 0;
+  fill("sessions", rows.map(s => {
+    const st = sessionState(s);
+    if (st === "active") active++;
+    const kill = st === "active"
+      ? `<button class="danger" onclick="armOrFire(this, () => revokeSession('${esc(s.session_id)}'))">revoke</button>` : "";
+    return `<tr><td class="id">${esc(s.session_id)}</td><td>${esc(s.agent_id)}</td>
+      <td class="num muted">${fmtTime(s.created_at)}</td><td class="num muted">${fmtTime(s.expires_at)}</td>
+      <td class="state-${st}">${st}</td><td>${kill}</td></tr>`;
+  }), "No sessions yet — sessions appear when an agent calls agent_hello.", 6);
+  $("sessions-count").innerHTML = `<b>${active}</b> active / ${rows.length}`;
+}
+async function revokeSession(id) {
+  await api(`/sessions/${id}/revoke`, { method: "POST", body: { reason: "revoked from console" } });
+  await Promise.all([loadSessions(), loadAudit()]);
+}
+
+async function loadAudit() {
+  loadingRow("audit", 5);
+  const f = $("audit-filter").value;
+  const rows = await api("/audit?limit=100" + (f ? "&event_type=" + encodeURIComponent(f) : ""));
+  fill("audit", rows.map(e => {
+    const meta = e.metadata && Object.keys(e.metadata).length
+      ? Object.entries(e.metadata).map(([k, v]) => `${esc(k)}=${esc(String(v))}`).join(" ") : "";
+    return `<tr><td class="num muted">${fmtTime(e.created_at)}</td><td>${esc(e.event_type)}</td>
+      <td>${esc(e.service_name || "")}</td><td class="id">${esc(e.session_id || "")}</td>
+      <td class="muted">${meta}</td></tr>`;
+  }), "No audit events match.", 5);
+  $("audit-count").innerHTML = `last <b>${rows.length}</b>`;
+}
+
+async function loadSecrets() {
+  loadingRow("secrets", 5);
+  const rows = await api("/secrets");
+  fill("secrets", rows.map(s => `<tr>
+    <td>${esc(s.service_name)}</td><td>${esc(s.label)}</td><td>${esc(s.environment)}</td>
+    <td class="num muted">${fmtTime(s.updated_at)}</td>
+    <td><button class="ghost" onclick="toggleVersions(this, '${esc(s.service_name)}', '${esc(s.label)}', '${esc(s.environment)}')">versions</button>
+        <button class="danger" onclick="armOrFire(this, () => deleteSecret('${esc(s.service_name)}', '${esc(s.label)}', '${esc(s.environment)}'))">delete</button></td>
+  </tr>`), "No secrets stored. Add one with: avp add-secret", 5);
+  $("secrets-count").innerHTML = `<b>${rows.length}</b>`;
+}
+async function toggleVersions(btn, service, label, env) {
+  const tr = btn.closest("tr");
+  if (tr.nextElementSibling && tr.nextElementSibling.classList.contains("versions")) {
+    tr.nextElementSibling.remove(); return;
+  }
+  const q = `service_name=${encodeURIComponent(service)}&label=${encodeURIComponent(label)}&environment=${encodeURIComponent(env)}`;
+  const versions = await api("/secrets/versions?" + q);
+  const lines = versions.map(v =>
+    `v${v.version} · key ${esc(v.key_version)} · ${fmtTime(v.created_at)}` +
+    (v.is_current ? ' · <span class="cur">current</span>'
+      : ` · <button class="ghost" onclick="rollbackSecret('${esc(service)}','${esc(label)}','${esc(env)}',${v.version})">roll back</button>`)
+  ).join("<br>");
+  tr.insertAdjacentHTML("afterend", `<tr class="versions"><td colspan="5">${lines}</td></tr>`);
+}
+async function rollbackSecret(service, label, env, version) {
+  await api("/secrets/rollback", { method: "POST", body: { service_name: service, label, environment: env, version } });
+  await Promise.all([loadSecrets(), loadAudit()]);
+}
+async function deleteSecret(service, label, env) {
+  const q = `service_name=${encodeURIComponent(service)}&label=${encodeURIComponent(label)}&environment=${encodeURIComponent(env)}`;
+  await api("/secrets?" + q, { method: "DELETE" });
+  await Promise.all([loadSecrets(), loadAudit()]);
+}
+
+async function loadAgents() {
+  loadingRow("agents", 3);
+  const rows = await api("/agents");
+  fill("agents", rows.map(a => `<tr><td>${esc(a.agent_id)}</td><td>${esc(a.name)}</td>
+    <td class="num muted">${fmtTime(a.created_at)}</td></tr>`),
+    "No agents registered. Create one with: avp create-agent", 3);
+  $("agents-count").innerHTML = `<b>${rows.length}</b>`;
+}
+
+async function loadTokens() {
+  loadingRow("tokens", 6);
+  const rows = await api("/tokens");
+  let active = 0;
+  fill("tokens", rows.map(t => {
+    const st = t.revoked_at ? "revoked" : "active";
+    if (st === "active") active++;
+    const kill = st === "active"
+      ? `<button class="danger" onclick="armOrFire(this, () => revokeToken(${t.token_id}))">revoke</button>` : "";
+    return `<tr><td class="num">${t.token_id}</td><td>${esc(t.token_type)}</td><td>${esc(t.agent_id || "")}</td>
+      <td class="num muted">${fmtTime(t.created_at)}</td><td class="state-${st === "active" ? "active" : "revoked"}">${st}</td><td>${kill}</td></tr>`;
+  }), "No tokens.", 6);
+  $("tokens-count").innerHTML = `<b>${active}</b> active / ${rows.length}`;
+}
+async function revokeToken(id) {
+  await api(`/tokens/${id}/revoke`, { method: "POST", body: { reason: "revoked from console" } });
+  await Promise.all([loadTokens(), loadAudit()]);
+}
+
+async function refreshAll() {
+  banner("");
+  try {
+    await Promise.all([loadSessions(), loadAudit(), loadSecrets(), loadAgents(), loadTokens()]);
+    $("refreshed").textContent = "updated " + fmtTime(new Date().toISOString());
+  } catch (e) {
+    if (e.message !== "unauthorized") banner(e.message);
+  }
+}
+
+function connectUI() {
+  $("gate").style.display = "none";
+  $("console").style.display = "block";
+  $("wholine").textContent = "principal token ···" + store.token.slice(-6);
+  refreshAll();
+}
+function disconnect(msg) {
+  store.token = "";
+  $("console").style.display = "none";
+  $("gate").style.display = "block";
+  $("gate-err").textContent = msg || "";
+}
+
+$("gate-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const tok = $("gate-token").value.trim();
+  if (!tok) return;
+  store.token = tok;
+  try {
+    await api("/agents");           // cheapest authenticated probe
+    $("gate-token").value = "";
+    connectUI();
+  } catch (e) {
+    if (e.message !== "unauthorized") $("gate-err").textContent = e.message;
+  }
+});
+
+/* health check + auto-refresh */
+async function health() {
+  try { await fetch("/healthz").then(r => r.json());
+        $("health").className = "ok"; $("health").textContent = "server up"; }
+  catch { $("health").className = "bad"; $("health").textContent = "server unreachable"; }
+}
+health();
+setInterval(health, 30000);
+setInterval(() => { if ($("console").style.display === "block") refreshAll(); }, 60000);
+
+if (store.token) connectUI();
+</script>
+</body>
+</html>

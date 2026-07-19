@@ -51,6 +51,8 @@ Control plane endpoints
 - GET /sessions, POST /sessions/{session_id}/revoke
 - GET /audit — principal-scoped audit log (filter by event_type, session_id)
 - GET /services — service registry discovery
+- GET /dashboard — self-contained web console (principal token entered in the
+  browser; talks to the same-origin control API, no CORS, no server session)
 - POST /dev/bootstrap_principal (dev mode), POST /admin/bootstrap_principal (one-time token)
 
 Proxy adapters
