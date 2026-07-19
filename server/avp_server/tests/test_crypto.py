@@ -70,14 +70,14 @@ def test_is_using_ephemeral_key_false_with_valid_key(valid_key_env):
     """Test that is_using_ephemeral_key returns False with valid key."""
     from server.avp_server.crypto import is_using_ephemeral_key
     result = is_using_ephemeral_key()
-    assert result == False
+    assert not result
 
 
 def test_is_using_ephemeral_key_true_in_dev_mode(dev_ephemeral_env):
     """Test that is_using_ephemeral_key returns True in dev mode with ephemeral."""
     from server.avp_server.crypto import is_using_ephemeral_key
     result = is_using_ephemeral_key()
-    assert result == True
+    assert result
 
 
 def test_decrypt_json_rejects_short_blob(valid_key_env):
@@ -101,11 +101,7 @@ class TestLocalEnvKeyProvider:
 
     def test_valid_key_creates_non_ephemeral_provider(self):
         """Test that valid 32-byte key creates non-ephemeral provider."""
-        import base64
-        from server.avp_server.crypto import LocalEnvKeyProvider, _urlsafe_b64decode_padded
-
-        # Create a valid 32-byte key
-        valid_key = base64.urlsafe_b64encode(b"a" * 32).decode()
+        from server.avp_server.crypto import LocalEnvKeyProvider
 
         # We can't easily test from_settings due to singleton, but we can test the class directly
         provider = LocalEnvKeyProvider(
@@ -114,7 +110,7 @@ class TestLocalEnvKeyProvider:
             _is_ephemeral=False
         )
 
-        assert provider.is_ephemeral == False
+        assert not provider.is_ephemeral
         dek, version = provider.get_current_dek()
         assert len(dek) == 32
         assert version == "test-v1"
@@ -130,7 +126,7 @@ class TestLocalEnvKeyProvider:
             _is_ephemeral=True
         )
 
-        assert provider.is_ephemeral == True
+        assert provider.is_ephemeral
         dek, version = provider.get_current_dek()
         assert len(dek) == 32
         assert version == "ephemeral"
@@ -243,7 +239,7 @@ class TestKeyProviderFromSettings:
         from server.avp_server.crypto import LocalEnvKeyProvider
 
         provider = LocalEnvKeyProvider.from_settings()
-        assert provider.is_ephemeral == True
+        assert provider.is_ephemeral
         assert provider.key_version == "ephemeral"
 
     def test_valid_key_in_any_mode_works(self, monkeypatch):
@@ -263,6 +259,6 @@ class TestKeyProviderFromSettings:
             from server.avp_server.crypto import LocalEnvKeyProvider
 
             provider = LocalEnvKeyProvider.from_settings()
-            assert provider.is_ephemeral == False
+            assert not provider.is_ephemeral
             dek, _ = provider.get_current_dek()
             assert len(dek) == 32

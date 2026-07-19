@@ -26,6 +26,20 @@ class AVPHttpClient:
                 raise RuntimeError(f"HTTP {resp.status_code}: {data}")
             return data
 
+    def delete(self, path: str, token: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.delete(self._url(path), headers=headers, params=params)
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"raw": resp.text}
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}: {data}")
+            return data
+
     def get(self, path: str, token: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         headers = {}
         if token:

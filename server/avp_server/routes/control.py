@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import secrets as pysecrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -64,8 +65,7 @@ def admin_bootstrap_principal(req: AdminBootstrapRequest, request: Request, conn
     if not settings.admin_bootstrap_token:
         raise HTTPException(status_code=404, detail="not found")
 
-    # Verify token matches (constant-time comparison would be better but this is one-time use)
-    if req.token != settings.admin_bootstrap_token:
+    if not pysecrets.compare_digest(req.token, settings.admin_bootstrap_token):
         raise HTTPException(status_code=403, detail="invalid bootstrap token")
 
     return _create_principal(req.email, req.display_name, request, conn)
@@ -131,6 +131,32 @@ def create_agent(req: CreateAgentRequest, request: Request, principal=Depends(re
                 user_agent=request.headers.get("user-agent"))
     conn.commit()
     return CreateAgentResponse(agent_db_id=aid, agent_id=req.agent_id)
+
+
+class AgentListItem(BaseModel):
+    agent_db_id: int
+    agent_id: str
+    name: str
+    description: Optional[str] = None
+    created_at: str
+
+
+@router.get("/agents", response_model=List[AgentListItem])
+def list_agents(principal=Depends(require_principal), conn=Depends(get_conn)):
+    pid = principal["principal_id"]
+    rows = fetchall(conn, """
+        SELECT id, agent_id, name, description, created_at
+        FROM agents
+        WHERE principal_id = %s
+        ORDER BY created_at DESC
+    """, [pid])
+    return [AgentListItem(
+        agent_db_id=r["id"],
+        agent_id=r["agent_id"],
+        name=r["name"],
+        description=r["description"],
+        created_at=r["created_at"].isoformat(),
+    ) for r in rows]
 
 
 class CreateAgentTokenRequest(BaseModel):
@@ -205,10 +231,15 @@ def upsert_secret(req: UpsertSecretRequest, request: Request, principal=Depends(
             "field": e.field
         })
 
+    # Look up without the deleted filter: re-adding a soft-deleted secret must
+    # revive the existing row, or the unique constraint rejects the INSERT.
     secret = fetchone(conn, """
-        SELECT id FROM secrets
-        WHERE principal_id = %s AND service_name = %s AND label = %s AND environment = %s AND deleted_at IS NULL
+        SELECT id, deleted_at FROM secrets
+        WHERE principal_id = %s AND service_name = %s AND label = %s AND environment = %s
     """, [pid, req.service_name, req.label, req.environment])
+
+    if secret and secret["deleted_at"] is not None:
+        execute(conn, "UPDATE secrets SET deleted_at = NULL WHERE id = %s", [secret["id"]])
 
     if not secret:
         execute(conn, """
@@ -258,6 +289,74 @@ def list_secrets(principal=Depends(require_principal), conn=Depends(get_conn)):
         ORDER BY updated_at DESC
     """, [pid])
     return [SecretMetaResponse(service_name=r["service_name"], label=r["label"], environment=r["environment"], updated_at=r["updated_at"].isoformat()) for r in rows]
+
+
+@router.delete("/secrets")
+def delete_secret(service_name: str, label: str, environment: str = "prod", request: Request = None, principal=Depends(require_principal), conn=Depends(get_conn)):
+    """Soft-delete a secret. Its versions are retained but it can no longer be resolved."""
+    pid = principal["principal_id"]
+    secret = fetchone(conn, """
+        SELECT id FROM secrets
+        WHERE principal_id = %s AND service_name = %s AND label = %s AND environment = %s AND deleted_at IS NULL
+    """, [pid, service_name, label, environment])
+    if not secret:
+        raise HTTPException(status_code=404, detail="secret not found")
+
+    execute(conn, "UPDATE secrets SET deleted_at = now() WHERE id = %s", [secret["id"]])
+    audit_event(conn, principal_id=pid, agent_db_id=None, session_db_id=None, session_id=None,
+                event_type="secret_deleted", service_name=service_name,
+                metadata={"label": label, "environment": environment},
+                ip_address=request.client.host if request and request.client else None,
+                user_agent=request.headers.get("user-agent") if request else None)
+    conn.commit()
+    return {"ok": True}
+
+
+class AuditLogItem(BaseModel):
+    event_type: str
+    service_name: Optional[str] = None
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+@router.get("/audit", response_model=List[AuditLogItem])
+def list_audit_logs(
+    event_type: Optional[str] = None,
+    session_id: Optional[str] = None,
+    limit: int = 100,
+    principal=Depends(require_principal),
+    conn=Depends(get_conn),
+):
+    """List audit log entries for the authenticated principal, newest first."""
+    pid = principal["principal_id"]
+    limit = max(1, min(limit, 500))
+
+    query = """
+        SELECT event_type, service_name, session_id, request_id, metadata, created_at
+        FROM audit_logs
+        WHERE principal_id = %s
+    """
+    params: List[Any] = [pid]
+    if event_type:
+        query += " AND event_type = %s"
+        params.append(event_type)
+    if session_id:
+        query += " AND session_id = %s"
+        params.append(session_id)
+    query += " ORDER BY created_at DESC, id DESC LIMIT %s"
+    params.append(limit)
+
+    rows = fetchall(conn, query, params)
+    return [AuditLogItem(
+        event_type=r["event_type"],
+        service_name=r["service_name"],
+        session_id=r["session_id"],
+        request_id=r["request_id"],
+        metadata=r["metadata"] or {},
+        created_at=r["created_at"].isoformat(),
+    ) for r in rows]
 
 
 class SessionListItem(BaseModel):

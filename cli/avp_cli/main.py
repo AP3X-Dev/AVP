@@ -134,6 +134,72 @@ def list_secrets():
     print(resp)
 
 
+@app.command("delete-secret")
+def delete_secret(
+    service: str = typer.Option(...),
+    label: str = typer.Option("default"),
+    environment: str = typer.Option("prod"),
+):
+    """Soft-delete a secret so it can no longer be resolved by agents."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    client.delete("/secrets", token=token, params={"service_name": service, "label": label, "environment": environment})
+    print(f"[green]Deleted secret[/green] {service}/{label} ({environment})")
+
+
+@app.command("list-agents")
+def list_agents():
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    print(client.get("/agents", token=token))
+
+
+@app.command("list-sessions")
+def list_sessions():
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    print(client.get("/sessions", token=token))
+
+
+@app.command("revoke-session")
+def revoke_session(session_id: str = typer.Option(...), reason: str = typer.Option("revoked")):
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    client.post(f"/sessions/{session_id}/revoke", token=token, json={"reason": reason})
+    print(f"[green]Revoked session[/green] {session_id}")
+
+
+@app.command("audit")
+def audit(
+    event_type: Optional[str] = typer.Option(None, help="Filter by event type, e.g. secret_resolved"),
+    session_id: Optional[str] = typer.Option(None, help="Filter by session id"),
+    limit: int = typer.Option(50, help="Max entries (up to 500)"),
+):
+    """Show recent audit log entries for your principal."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    params: Dict[str, Any] = {"limit": limit}
+    if event_type:
+        params["event_type"] = event_type
+    if session_id:
+        params["session_id"] = session_id
+    entries = client.get("/audit", token=token, params=params)
+    for e in entries:
+        svc = f" {e['service_name']}" if e.get("service_name") else ""
+        sess = f" [{e['session_id']}]" if e.get("session_id") else ""
+        print(f"{e['created_at']}  {e['event_type']}{svc}{sess}")
+
+
 def _load_capabilities(capabilities_file: Optional[str], resource: Optional[str] = "default") -> List[Dict[str, Any]]:
     """Load capabilities from file or return default.
 

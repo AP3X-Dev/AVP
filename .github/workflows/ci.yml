@@ -9,55 +9,51 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
-      
+
       - name: Install dependencies
         working-directory: server
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      
+
       - name: Run linter (ruff)
         working-directory: server
-        run: |
-          pip install ruff
-          ruff check avp_server --ignore=E501,F401
-        continue-on-error: true
-      
+        run: ruff check avp_server --ignore=E501,F401
+
       - name: Run tests
         working-directory: server
         env:
           AVP_DEV_MODE: "true"
           AVP_ALLOW_EPHEMERAL_DEK: "true"
-        run: |
-          pytest avp_server/tests/ -v --tb=short --ignore=avp_server/tests/test_auth.py
+        run: pytest avp_server/tests/ -v --tb=short
 
   lint-cli:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
-      
+
       - name: Install CLI dependencies
         working-directory: cli
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-      
+
       - name: Check CLI imports
         working-directory: cli
         run: python -c "from avp_cli.main import app; print('CLI imports OK')"
@@ -65,25 +61,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Check Dockerfile exists
-        run: |
-          if [ -f Dockerfile ] || [ -f server/Dockerfile ]; then
-            echo "Dockerfile found"
-          else
-            echo "No Dockerfile found, skipping build"
-            exit 0
-          fi
-      
-      - name: Build Docker image (if exists)
-        run: |
-          if [ -f Dockerfile ]; then
-            docker build -t avp-server:test .
-          elif [ -f server/Dockerfile ]; then
-            docker build -t avp-server:test server/
-          fi
-        continue-on-error: true
 
+      - name: Build Docker image
+        run: docker build -f server/Dockerfile -t avp-server:test .

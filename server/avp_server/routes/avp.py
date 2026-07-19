@@ -16,12 +16,19 @@ from ..policy import intersect_capabilities
 from ..crypto import decrypt_json
 from ..services.registry import get_service_spec, format_env, operation_allowed
 from ..services.openai_proxy import openai_chat_completion
+from ..services.anthropic_proxy import anthropic_messages
 from ..audit import audit_event
 from ..rate_limit import rate_limiter
 from ..session_utils import assert_valid_handle, _avp_error, _iso
 from ..secret_selection import select_secret
 
 router = APIRouter(prefix="/avp", tags=["avp"])
+
+# (service, operation) -> async adapter(secret_data, payload) -> (status_code, data)
+PROXY_ADAPTERS = {
+    ("openai", "chat"): openai_chat_completion,
+    ("anthropic", "messages"): anthropic_messages,
+}
 
 
 def _select_secret(conn, principal_id: int, service: str, environment: str, resource: Optional[str]):
@@ -184,7 +191,7 @@ def resolve_secrets(msg: ResolveSecrets, request: Request, session=Depends(requi
 
         try:
             secret_data = decrypt_json(bytes(ver["data_ciphertext"]))
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=500, detail=_avp_error("internal_error", "failed to decrypt secret").model_dump())
 
         if filters.format == "environment":
@@ -269,15 +276,16 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
 
     request_id = "req_" + secrets.token_urlsafe(16)
 
+    adapter = PROXY_ADAPTERS.get((service, msg.operation))
     try:
-        if service == "openai" and msg.operation == "chat":
-            status_code, data = await openai_chat_completion(secret_data, msg.payload)
+        if adapter:
+            status_code, data = await adapter(secret_data, msg.payload)
             if 200 <= status_code < 300:
                 result = ProxyResult(request_id=request_id, status="ok", result=data)
             else:
                 result = ProxyResult(request_id=request_id, status="error", error=ProxyError(code="proxy_failure", message=str(data.get("error", {}).get("message", "proxy error"))), result=data)
         else:
-            result = ProxyResult(request_id=request_id, status="error", error=ProxyError(code="unknown_service", message="no proxy adapter for this service"))
+            result = ProxyResult(request_id=request_id, status="error", error=ProxyError(code="unknown_service", message="no proxy adapter for this operation"))
     except Exception as e:
         result = ProxyResult(request_id=request_id, status="error", error=ProxyError(code="proxy_failure", message=str(e)))
 

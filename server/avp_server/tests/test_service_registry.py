@@ -139,7 +139,7 @@ class TestServiceSpec:
     def test_spec_has_credential_schema(self):
         """Test that spec has credential schema."""
         assert "api_key" in OPENAI_SPEC.credential_schema
-        assert OPENAI_SPEC.credential_schema["api_key"]["required"] == True
+        assert OPENAI_SPEC.credential_schema["api_key"]["required"] is True
     
     def test_spec_has_env_mapping(self):
         """Test that spec has environment variable mapping."""

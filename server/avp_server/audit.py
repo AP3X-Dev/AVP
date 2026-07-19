@@ -23,11 +23,11 @@ def audit_event(
 ) -> None:
     execute(conn, """
         INSERT INTO audit_logs (
-            principal_id, agent_id, session_db_id, session_id, event_type, service_name, capability::jsonb,
-            request_id, ip_address, user_agent, metadata::jsonb
+            principal_id, agent_id, session_db_id, session_id, event_type, service_name, capability,
+            request_id, ip_address, user_agent, metadata
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s::jsonb,
+            %s, %s, %s, %s::jsonb
         )
     """, [
         principal_id,
@@ -36,9 +36,9 @@ def audit_event(
         session_id,
         event_type,
         service_name,
-        capability,
+        json.dumps(capability) if capability is not None else None,
         request_id,
         ip_address,
         user_agent,
-        metadata or {},
+        json.dumps(metadata or {}),
     ])

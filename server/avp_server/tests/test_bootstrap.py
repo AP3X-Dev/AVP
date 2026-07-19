@@ -38,13 +38,13 @@ class TestBootstrapConfig:
         if "AVP_DEV_MODE" in os.environ:
             del os.environ["AVP_DEV_MODE"]
         settings = Settings()
-        assert settings.dev_mode == False
+        assert not settings.dev_mode
 
         # Test dev mode true
         os.environ["AVP_DEV_MODE"] = "true"
         try:
             settings = Settings()
-            assert settings.dev_mode == True
+            assert settings.dev_mode
         finally:
             del os.environ["AVP_DEV_MODE"]
 

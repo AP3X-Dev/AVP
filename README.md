@@ -10,14 +10,15 @@ What is included
 
 1. FastAPI server implementing control plane and AVP data plane
 2. Postgres schema migration
-3. AES GCM encrypted secret storage with versioning
+3. AES GCM encrypted secret storage with versioning and soft deletion
 4. Argon2 token hashing for principal, agent, and session tokens
-5. Capability intersection and session enforcement
+5. Capability intersection, label binding, and session enforcement
 6. Secret resolution bundles (environment and json)
-7. Proxy calls for OpenAI Chat Completions (proxy only mode)
-8. CLI to replace .env workflows
-9. Python SDK (bootstrap helper)
-10. Example agent script
+7. Proxy calls for OpenAI Chat Completions and Anthropic Messages (proxy only mode)
+8. Principal-scoped audit log with query endpoint
+9. CLI to replace .env workflows (secrets, agents, sessions, audit)
+10. Python and Node SDKs
+11. Example agent script
 
 ## Quickstart (Docker)
 
@@ -66,7 +67,18 @@ This MVP uses a local DEK derived from AVP_DEK_B64 for encrypting secrets. In pr
 
 Proxy calls
 
-Proxy calls are implemented for OpenAI Chat Completions using the stored OpenAI API key. The agent never receives the key in proxy only mode.
+Proxy calls are implemented for OpenAI Chat Completions and Anthropic Messages using the stored API keys. The agent never receives the key in proxy only mode.
+
+Useful CLI commands
+
+```bash
+python -m cli.avp_cli.main list-secrets
+python -m cli.avp_cli.main delete-secret --service openai --label personal_default
+python -m cli.avp_cli.main list-agents
+python -m cli.avp_cli.main list-sessions
+python -m cli.avp_cli.main revoke-session --session-id ses_abc123
+python -m cli.avp_cli.main audit --event-type secret_resolved --limit 50
+```
 
 ## Repo layout
 
@@ -74,4 +86,5 @@ Proxy calls are implemented for OpenAI Chat Completions using the stored OpenAI 
 - server/migrations: SQL migration files
 - cli/avp_cli: CLI tool
 - sdk-python/avp_client: Python SDK
+- sdk-node: Node/TypeScript SDK
 - examples/langgraph: simple example script
