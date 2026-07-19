@@ -20,7 +20,8 @@ from ..services.registry import get_service_spec, format_env, operation_allowed
 from ..services.openai_proxy import openai_chat_completion, openai_embeddings, openai_chat_target
 from ..services.anthropic_proxy import anthropic_messages, anthropic_messages_target
 from ..audit import audit_event
-from ..rate_limit import rate_limiter
+from ..config import settings
+from ..rate_limit import rate_limiter, allow_db
 from ..session_utils import assert_valid_handle, _avp_error, _iso
 from ..secret_selection import select_secret
 
@@ -261,8 +262,12 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
     if not operation_allowed(service, msg.operation, scopes):
         raise HTTPException(status_code=403, detail=_avp_error("operation_not_allowed", "operation not allowed by scopes").model_dump())
 
-    # Rate limit: 60 per minute by default
-    ok = rate_limiter.allow(msg.session_id, service, msg.operation, capacity=60.0, refill_per_sec=1.0)
+    limit = settings.proxy_rate_limit_per_minute
+    if settings.rate_limit_backend == "postgres":
+        ok = allow_db(fetchone, execute, conn, f"{msg.session_id}:{service}:{msg.operation}", limit)
+        conn.commit()  # persist the counter even when this request is rejected
+    else:
+        ok = rate_limiter.allow(msg.session_id, service, msg.operation, capacity=float(limit), refill_per_sec=limit / 60.0)
     if not ok:
         raise HTTPException(status_code=429, detail=_avp_error("rate_limit_exceeded", "rate limit exceeded").model_dump())
 

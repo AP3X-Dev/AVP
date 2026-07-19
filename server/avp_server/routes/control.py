@@ -348,16 +348,96 @@ def list_secrets(principal=Depends(require_principal), conn=Depends(get_conn)):
     return [SecretMetaResponse(service_name=r["service_name"], label=r["label"], environment=r["environment"], updated_at=r["updated_at"].isoformat()) for r in rows]
 
 
-@router.delete("/secrets")
-def delete_secret(service_name: str, label: str, environment: str = "prod", request: Request = None, principal=Depends(require_principal), conn=Depends(get_conn)):
-    """Soft-delete a secret. Its versions are retained but it can no longer be resolved."""
-    pid = principal["principal_id"]
+def _find_secret(conn, pid: int, service_name: str, label: str, environment: str):
     secret = fetchone(conn, """
         SELECT id FROM secrets
         WHERE principal_id = %s AND service_name = %s AND label = %s AND environment = %s AND deleted_at IS NULL
     """, [pid, service_name, label, environment])
     if not secret:
         raise HTTPException(status_code=404, detail="secret not found")
+    return secret
+
+
+class SecretVersionItem(BaseModel):
+    version: int
+    key_version: str
+    is_current: bool
+    created_at: str
+
+
+@router.get("/secrets/versions", response_model=List[SecretVersionItem])
+def list_secret_versions(service_name: str, label: str, environment: str = "prod", principal=Depends(require_principal), conn=Depends(get_conn)):
+    """List a secret's version history (metadata only, never the data)."""
+    pid = principal["principal_id"]
+    secret = _find_secret(conn, pid, service_name, label, environment)
+    rows = fetchall(conn, """
+        SELECT version, key_version, is_current, created_at
+        FROM secret_versions
+        WHERE secret_id = %s
+        ORDER BY version DESC
+    """, [secret["id"]])
+    return [SecretVersionItem(
+        version=r["version"],
+        key_version=r["key_version"],
+        is_current=r["is_current"],
+        created_at=r["created_at"].isoformat(),
+    ) for r in rows]
+
+
+class RollbackSecretRequest(BaseModel):
+    service_name: str
+    label: str
+    environment: str = "prod"
+    version: int
+
+
+@router.post("/secrets/rollback", response_model=SecretMetaResponse)
+def rollback_secret(req: RollbackSecretRequest, request: Request, principal=Depends(require_principal), conn=Depends(get_conn)):
+    """Roll a secret back to an earlier version.
+
+    Appends a new version carrying the old ciphertext (history stays intact)
+    rather than flipping is_current on the old row.
+    """
+    pid = principal["principal_id"]
+    secret = _find_secret(conn, pid, req.service_name, req.label, req.environment)
+    secret_id = secret["id"]
+
+    target = fetchone(conn, """
+        SELECT version, data_ciphertext, key_version, is_current
+        FROM secret_versions
+        WHERE secret_id = %s AND version = %s
+    """, [secret_id, req.version])
+    if not target:
+        raise HTTPException(status_code=404, detail=f"version {req.version} not found")
+
+    if not target["is_current"]:
+        latest = fetchone(conn, "SELECT version FROM secret_versions WHERE secret_id = %s ORDER BY version DESC LIMIT 1", [secret_id])
+        next_version = latest["version"] + 1
+
+        execute(conn, "UPDATE secret_versions SET is_current = FALSE WHERE secret_id = %s AND is_current = TRUE", [secret_id])
+        execute(conn, """
+            INSERT INTO secret_versions (secret_id, version, data_ciphertext, key_version, created_by, is_current)
+            VALUES (%s, %s, %s, %s, %s, TRUE)
+        """, [secret_id, next_version, target["data_ciphertext"], target["key_version"], pid])
+        execute(conn, "UPDATE secrets SET updated_at = now() WHERE id = %s", [secret_id])
+
+        audit_event(conn, principal_id=pid, agent_db_id=None, session_db_id=None, session_id=None,
+                    event_type="secret_rolled_back", service_name=req.service_name,
+                    metadata={"label": req.label, "environment": req.environment,
+                              "from_version": req.version, "new_version": next_version},
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"))
+        conn.commit()
+
+    meta = fetchone(conn, "SELECT updated_at FROM secrets WHERE id = %s", [secret_id])
+    return SecretMetaResponse(service_name=req.service_name, label=req.label, environment=req.environment, updated_at=meta["updated_at"].isoformat())
+
+
+@router.delete("/secrets")
+def delete_secret(service_name: str, label: str, environment: str = "prod", request: Request = None, principal=Depends(require_principal), conn=Depends(get_conn)):
+    """Soft-delete a secret. Its versions are retained but it can no longer be resolved."""
+    pid = principal["principal_id"]
+    secret = _find_secret(conn, pid, service_name, label, environment)
 
     execute(conn, "UPDATE secrets SET deleted_at = now() WHERE id = %s", [secret["id"]])
     audit_event(conn, principal_id=pid, agent_db_id=None, session_db_id=None, session_id=None,

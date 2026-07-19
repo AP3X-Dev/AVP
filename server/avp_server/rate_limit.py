@@ -37,3 +37,26 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter()
+
+
+def allow_db(fetchone_fn, execute_fn, conn, key: str, limit: int) -> bool:
+    """Postgres-backed rate limit: atomic upsert counter per 1-minute window.
+
+    Survives restarts and works across replicas, unlike the in-memory bucket.
+    Caller must commit so the increment persists even when the request is
+    rejected (the 429 path would otherwise roll it back).
+    """
+    # ponytail: fixed window (allows ~2x burst at boundaries); switch to a
+    # sliding window or DB token bucket if that matters
+    row = fetchone_fn(conn, """
+        INSERT INTO rate_limit_counters (key, window_start, count)
+        VALUES (%s, date_trunc('minute', now()), 1)
+        ON CONFLICT (key, window_start)
+        DO UPDATE SET count = rate_limit_counters.count + 1
+        RETURNING count
+    """, [key])
+    execute_fn(conn, """
+        DELETE FROM rate_limit_counters
+        WHERE key = %s AND window_start < now() - interval '10 minutes'
+    """, [key])
+    return row["count"] <= limit

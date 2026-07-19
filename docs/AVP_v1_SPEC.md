@@ -45,6 +45,9 @@ Control plane endpoints
 - POST /agents, GET /agents, POST /agents/{agent_id}/tokens
 - GET /tokens, POST /tokens/{token_id}/revoke — token inventory and revocation
 - POST /secrets, GET /secrets, DELETE /secrets (soft delete)
+- GET /secrets/versions — version history (metadata only)
+- POST /secrets/rollback — roll back to an earlier version (appends a new
+  version carrying the old ciphertext; history stays intact)
 - GET /sessions, POST /sessions/{session_id}/revoke
 - GET /audit — principal-scoped audit log (filter by event_type, session_id)
 - GET /services — service registry discovery
@@ -81,6 +84,10 @@ environment; the server unwraps them via KMS Decrypt at startup (requires
 with `python server/scripts/wrap_dek.py --kms-key-id alias/avp`. Rotation uses
 `AVP_KMS_WRAPPED_KEYRING_B64`, a JSON map of key_version -> wrapped DEK.
 
-MVP constraints
+Rate limiting
 
-- Rate limiting is in-memory per server process
+Proxy calls are limited per (session, service, operation). The default
+backend is Postgres (fixed 1-minute window counters — survives restarts and
+works across replicas); set `AVP_RATE_LIMIT_BACKEND=memory` for the
+per-process token bucket. `AVP_PROXY_RATE_LIMIT_PER_MINUTE` sets the limit
+(default 60).

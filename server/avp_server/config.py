@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     anthropic_base_url: str = "https://api.anthropic.com"
 
+    # Rate limiting for proxy calls: "postgres" (survives restarts, works
+    # across replicas) or "memory" (per-process token bucket)
+    rate_limit_backend: str = "postgres"
+    proxy_rate_limit_per_minute: int = 60
+
     # Admin bootstrap: one-time token for creating first principal
     # When set, POST /admin/bootstrap_principal is enabled
     # Should be removed after initial setup

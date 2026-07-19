@@ -134,6 +134,41 @@ def list_secrets():
     print(resp)
 
 
+@app.command("secret-versions")
+def secret_versions(
+    service: str = typer.Option(...),
+    label: str = typer.Option("default"),
+    environment: str = typer.Option("prod"),
+):
+    """Show a secret's version history."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    versions = client.get("/secrets/versions", token=token, params={"service_name": service, "label": label, "environment": environment})
+    for v in versions:
+        marker = " (current)" if v["is_current"] else ""
+        print(f"v{v['version']}  key={v['key_version']}  {v['created_at']}{marker}")
+
+
+@app.command("rollback-secret")
+def rollback_secret(
+    service: str = typer.Option(...),
+    label: str = typer.Option("default"),
+    environment: str = typer.Option("prod"),
+    version: int = typer.Option(..., help="Version to roll back to (see secret-versions)"),
+):
+    """Roll a secret back to an earlier version."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    client.post("/secrets/rollback", token=token, json={
+        "service_name": service, "label": label, "environment": environment, "version": version
+    })
+    print(f"[green]Rolled back[/green] {service}/{label} ({environment}) to v{version}")
+
+
 @app.command("delete-secret")
 def delete_secret(
     service: str = typer.Option(...),
