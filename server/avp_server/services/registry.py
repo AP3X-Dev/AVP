@@ -72,7 +72,8 @@ OPENAI_SPEC = ServiceSpec(
         "OPENAI_ORG_ID": "org_id",
     },
     operations={
-        "chat": "chat"
+        "chat": "chat",
+        "embeddings": "embeddings",
     }
 )
 

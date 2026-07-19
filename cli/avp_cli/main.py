@@ -177,6 +177,30 @@ def revoke_session(session_id: str = typer.Option(...), reason: str = typer.Opti
     print(f"[green]Revoked session[/green] {session_id}")
 
 
+@app.command("list-tokens")
+def list_tokens():
+    """List API tokens (metadata only — token values are never retrievable)."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    for t in client.get("/tokens", token=token):
+        state = "revoked" if t.get("revoked_at") else "active"
+        agent = f" agent={t['agent_id']}" if t.get("agent_id") else ""
+        print(f"#{t['token_id']}  {t['token_type']}{agent}  {state}  created {t['created_at']}")
+
+
+@app.command("revoke-token")
+def revoke_token(token_id: int = typer.Option(...), reason: str = typer.Option("revoked")):
+    """Revoke an API token by id (see list-tokens). Takes effect immediately."""
+    cfg = load_config()
+    url = _require_url(cfg)
+    token = _require_principal_token(cfg)
+    client = AVPHttpClient(url)
+    client.post(f"/tokens/{token_id}/revoke", token=token, json={"reason": reason})
+    print(f"[green]Revoked token[/green] #{token_id}")
+
+
 @app.command("audit")
 def audit(
     event_type: Optional[str] = typer.Option(None, help="Filter by event type, e.g. secret_resolved"),

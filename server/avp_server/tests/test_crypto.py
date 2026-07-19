@@ -105,7 +105,7 @@ class TestLocalEnvKeyProvider:
 
         # We can't easily test from_settings due to singleton, but we can test the class directly
         provider = LocalEnvKeyProvider(
-            dek=b"a" * 32,
+            keyring={"test-v1": b"a" * 32},
             key_version="test-v1",
             _is_ephemeral=False
         )
@@ -121,7 +121,7 @@ class TestLocalEnvKeyProvider:
         import secrets
 
         provider = LocalEnvKeyProvider(
-            dek=secrets.token_bytes(32),
+            keyring={"ephemeral": secrets.token_bytes(32)},
             key_version="ephemeral",
             _is_ephemeral=True
         )
@@ -138,7 +138,7 @@ class TestLocalEnvKeyProvider:
         import secrets as sec
 
         dek = sec.token_bytes(32)
-        provider = LocalEnvKeyProvider(dek=dek, key_version="v1", _is_ephemeral=False)
+        provider = LocalEnvKeyProvider(keyring={"v1": dek}, key_version="v1", _is_ephemeral=False)
 
         # Encrypt some data manually
         aesgcm = AESGCM(dek)
@@ -158,7 +158,7 @@ class TestLocalEnvKeyProvider:
         import secrets as sec
 
         dek = sec.token_bytes(32)
-        provider = LocalEnvKeyProvider(dek=dek, key_version="v1", _is_ephemeral=False)
+        provider = LocalEnvKeyProvider(keyring={"v1": dek}, key_version="v1", _is_ephemeral=False)
 
         # Encrypt some data manually
         aesgcm = AESGCM(dek)
@@ -167,9 +167,35 @@ class TestLocalEnvKeyProvider:
         ct = aesgcm.encrypt(nonce, plaintext, None)
         blob = nonce + ct
 
-        # Try to decrypt with wrong version - should raise
-        with pytest.raises(KeyProviderError, match="key version mismatch"):
+        # Try to decrypt with unknown version - should raise
+        with pytest.raises(KeyProviderError, match="no key for version"):
             provider.decrypt_with_key_version("v2", blob)
+
+    def test_keyring_rotation_decrypts_old_versions(self):
+        """After rotation, data encrypted under an old key version still decrypts."""
+        from server.avp_server.crypto import LocalEnvKeyProvider
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        import secrets as sec
+
+        old_dek = sec.token_bytes(32)
+        new_dek = sec.token_bytes(32)
+
+        # Encrypt under the old key
+        aesgcm = AESGCM(old_dek)
+        nonce = sec.token_bytes(12)
+        blob = nonce + aesgcm.encrypt(nonce, b"rotated data", None)
+
+        # Provider rotated to v2 but keeps v1 in the keyring
+        provider = LocalEnvKeyProvider(
+            keyring={"v1": old_dek, "v2": new_dek},
+            key_version="v2",
+            _is_ephemeral=False
+        )
+
+        dek, version = provider.get_current_dek()
+        assert version == "v2"
+        assert dek == new_dek
+        assert provider.decrypt_with_key_version("v1", blob) == b"rotated data"
 
 
 class TestKeyProviderFromSettings:
@@ -262,3 +288,47 @@ class TestKeyProviderFromSettings:
             assert not provider.is_ephemeral
             dek, _ = provider.get_current_dek()
             assert len(dek) == 32
+
+    def test_keyring_from_settings(self, monkeypatch):
+        """Test that AVP_DEK_KEYRING_B64 configures a multi-version keyring."""
+        import json as jsonlib
+
+        k1 = base64.urlsafe_b64encode(sec.token_bytes(32)).decode()
+        k2 = base64.urlsafe_b64encode(sec.token_bytes(32)).decode()
+        monkeypatch.setenv("AVP_DEK_KEYRING_B64", jsonlib.dumps({"v1": k1, "v2": k2}))
+        monkeypatch.setenv("AVP_KEY_VERSION", "v2")
+        monkeypatch.delenv("AVP_DEK_B64", raising=False)
+
+        # Reset singleton and settings
+        import server.avp_server.crypto as crypto_module
+        from server.avp_server.config import Settings
+        crypto_module._key_provider = None
+        crypto_module.settings = Settings()
+
+        from server.avp_server.crypto import LocalEnvKeyProvider
+
+        provider = LocalEnvKeyProvider.from_settings()
+        assert not provider.is_ephemeral
+        assert set(provider.keyring) == {"v1", "v2"}
+        _, version = provider.get_current_dek()
+        assert version == "v2"
+
+    def test_keyring_missing_current_version_rejected(self, monkeypatch):
+        """Test that AVP_KEY_VERSION absent from the keyring fails startup."""
+        import json as jsonlib
+        from server.avp_server.crypto import KeyProviderError
+
+        k1 = base64.urlsafe_b64encode(sec.token_bytes(32)).decode()
+        monkeypatch.setenv("AVP_DEK_KEYRING_B64", jsonlib.dumps({"v1": k1}))
+        monkeypatch.setenv("AVP_KEY_VERSION", "v9")
+        monkeypatch.delenv("AVP_DEK_B64", raising=False)
+
+        import server.avp_server.crypto as crypto_module
+        from server.avp_server.config import Settings
+        crypto_module._key_provider = None
+        crypto_module.settings = Settings()
+
+        from server.avp_server.crypto import LocalEnvKeyProvider
+
+        with pytest.raises(KeyProviderError, match="not present in keyring"):
+            LocalEnvKeyProvider.from_settings()

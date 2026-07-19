@@ -58,36 +58,39 @@ class KeyProvider(ABC):
 
 @dataclass(frozen=True)
 class LocalEnvKeyProvider(KeyProvider):
-    """Local key provider that reads DEK from environment.
+    """Local key provider that reads DEKs from environment.
 
     Supports:
-    - Single key version (current implementation)
+    - A keyring of key_version -> DEK (AVP_DEK_KEYRING_B64) for rotation:
+      new data encrypts under AVP_KEY_VERSION, old versions stay decryptable
+    - Single-key mode via AVP_DEK_B64 (merged into the keyring)
     - Strict production mode (fails if key missing/invalid)
     - Dev mode with optional ephemeral key
-
-    For key rotation support, extend this to maintain a mapping
-    of key_version -> dek_bytes.
     """
-    dek: bytes
+    keyring: Dict[str, bytes]
     key_version: str
     _is_ephemeral: bool
 
     def get_current_dek(self) -> Tuple[bytes, str]:
-        return (self.dek, self.key_version)
+        return (self.keyring[self.key_version], self.key_version)
 
     def decrypt_with_key_version(self, key_version: str, blob: bytes) -> bytes:
-        # For v1, we only support single key version
-        # Future: maintain a map of old versions for rotation
-        if key_version != self.key_version and not self._is_ephemeral:
-            # In production with stable keys, version mismatch is an error
-            # With ephemeral keys, we accept any version (dev convenience)
-            raise KeyProviderError(f"key version mismatch: stored={key_version}, current={self.key_version}")
+        if self._is_ephemeral:
+            # Ephemeral mode accepts any stored version (dev convenience)
+            dek = self.keyring[self.key_version]
+        else:
+            dek = self.keyring.get(key_version)
+            if dek is None:
+                raise KeyProviderError(
+                    f"no key for version '{key_version}'; "
+                    f"add it to AVP_DEK_KEYRING_B64 (known: {sorted(self.keyring)})"
+                )
 
         if len(blob) < 13:
             raise ValueError("ciphertext too short")
         nonce = blob[:12]
         ct = blob[12:]
-        aesgcm = AESGCM(self.dek)
+        aesgcm = AESGCM(dek)
         return aesgcm.decrypt(nonce, ct, None)
 
     @property
@@ -99,33 +102,52 @@ class LocalEnvKeyProvider(KeyProvider):
         """Create key provider from settings with strict validation.
 
         Raises:
-            KeyProviderError: If key is invalid/missing and ephemeral is not allowed
+            KeyProviderError: If keys are invalid/missing and ephemeral is not allowed
         """
-        raw = settings.dek_b64
-        dek: Optional[bytes] = None
+        keyring: Dict[str, bytes] = {}
         decode_error: Optional[str] = None
 
-        try:
-            decoded = _urlsafe_b64decode_padded(raw)
-            if len(decoded) == 32:
-                dek = decoded
-            elif len(decoded) == 0:
-                decode_error = "AVP_DEK_B64 is empty"
-            else:
-                decode_error = f"AVP_DEK_B64 decoded to {len(decoded)} bytes, expected 32"
-        except Exception as e:
-            decode_error = f"AVP_DEK_B64 is not valid base64: {e}"
+        if settings.dek_keyring_b64.strip():
+            try:
+                raw_ring = json.loads(settings.dek_keyring_b64)
+                if not isinstance(raw_ring, dict):
+                    raise ValueError("must be a JSON object")
+                for version, b64 in raw_ring.items():
+                    decoded = _urlsafe_b64decode_padded(str(b64))
+                    if len(decoded) != 32:
+                        raise ValueError(f"key '{version}' decoded to {len(decoded)} bytes, expected 32")
+                    keyring[version] = decoded
+            except Exception as e:
+                decode_error = f"AVP_DEK_KEYRING_B64 is invalid: {e}"
+                keyring = {}
 
-        # Determine if we can use ephemeral key
-        can_use_ephemeral = settings.dev_mode and settings.allow_ephemeral_dek
+        if settings.dek_b64.strip() and decode_error is None:
+            try:
+                decoded = _urlsafe_b64decode_padded(settings.dek_b64)
+                if len(decoded) == 32:
+                    keyring.setdefault(settings.key_version, decoded)
+                else:
+                    decode_error = f"AVP_DEK_B64 decoded to {len(decoded)} bytes, expected 32"
+            except Exception as e:
+                decode_error = f"AVP_DEK_B64 is not valid base64: {e}"
 
-        if dek is not None:
-            # Valid key provided
+        if keyring and decode_error is None:
+            if settings.key_version not in keyring:
+                raise KeyProviderError(
+                    f"AVP_KEY_VERSION '{settings.key_version}' not present in keyring "
+                    f"(known: {sorted(keyring)})"
+                )
             return LocalEnvKeyProvider(
-                dek=dek,
+                keyring=keyring,
                 key_version=settings.key_version,
                 _is_ephemeral=False
             )
+
+        if not keyring and decode_error is None:
+            decode_error = "no encryption key configured (AVP_DEK_B64 / AVP_DEK_KEYRING_B64)"
+
+        # Determine if we can use ephemeral key
+        can_use_ephemeral = settings.dev_mode and settings.allow_ephemeral_dek
 
         if can_use_ephemeral:
             # Dev mode with ephemeral allowed - generate temporary key
@@ -137,7 +159,7 @@ class LocalEnvKeyProvider(KeyProvider):
                 "This is only acceptable for development."
             )
             return LocalEnvKeyProvider(
-                dek=secrets.token_bytes(32),
+                keyring={"ephemeral": secrets.token_bytes(32)},
                 key_version="ephemeral",
                 _is_ephemeral=True
             )

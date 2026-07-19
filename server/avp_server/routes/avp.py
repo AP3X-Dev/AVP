@@ -15,7 +15,7 @@ from ..auth import new_token, token_sha256, hash_token
 from ..policy import intersect_capabilities
 from ..crypto import decrypt_json
 from ..services.registry import get_service_spec, format_env, operation_allowed
-from ..services.openai_proxy import openai_chat_completion
+from ..services.openai_proxy import openai_chat_completion, openai_embeddings
 from ..services.anthropic_proxy import anthropic_messages
 from ..audit import audit_event
 from ..rate_limit import rate_limiter
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/avp", tags=["avp"])
 # (service, operation) -> async adapter(secret_data, payload) -> (status_code, data)
 PROXY_ADAPTERS = {
     ("openai", "chat"): openai_chat_completion,
+    ("openai", "embeddings"): openai_embeddings,
     ("anthropic", "messages"): anthropic_messages,
 }
 
@@ -179,7 +180,7 @@ def resolve_secrets(msg: ResolveSecrets, request: Request, session=Depends(requi
             raise HTTPException(status_code=400, detail=_avp_error(code, error).model_dump())
 
         ver = fetchone(conn, """
-            SELECT data_ciphertext
+            SELECT data_ciphertext, key_version
             FROM secret_versions
             WHERE secret_id = %s AND is_current = TRUE
             ORDER BY version DESC
@@ -190,7 +191,7 @@ def resolve_secrets(msg: ResolveSecrets, request: Request, session=Depends(requi
             raise HTTPException(status_code=500, detail=_avp_error("internal_error", "secret version missing").model_dump())
 
         try:
-            secret_data = decrypt_json(bytes(ver["data_ciphertext"]))
+            secret_data = decrypt_json(bytes(ver["data_ciphertext"]), key_version=ver["key_version"])
         except Exception:
             raise HTTPException(status_code=500, detail=_avp_error("internal_error", "failed to decrypt secret").model_dump())
 
@@ -263,7 +264,7 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
         raise HTTPException(status_code=400, detail=_avp_error(code, error).model_dump())
 
     ver = fetchone(conn, """
-        SELECT data_ciphertext
+        SELECT data_ciphertext, key_version
         FROM secret_versions
         WHERE secret_id = %s AND is_current = TRUE
         ORDER BY version DESC
@@ -272,7 +273,7 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
     if not ver:
         raise HTTPException(status_code=500, detail=_avp_error("internal_error", "secret version missing").model_dump())
 
-    secret_data = decrypt_json(bytes(ver["data_ciphertext"]))
+    secret_data = decrypt_json(bytes(ver["data_ciphertext"]), key_version=ver["key_version"])
 
     request_id = "req_" + secrets.token_urlsafe(16)
 

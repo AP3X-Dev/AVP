@@ -7,13 +7,13 @@ import httpx
 from ..config import settings
 
 
-async def openai_chat_completion(secret_data: Dict[str, Any], payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+async def _openai_post(path: str, secret_data: Dict[str, Any], payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
     api_key = secret_data.get("api_key")
     base_url = secret_data.get("base_url") or settings.openai_base_url
     if not api_key:
         return 500, {"error": {"message": "missing api_key in secret", "type": "server_error"}}
 
-    url = base_url.rstrip("/") + "/chat/completions"
+    url = base_url.rstrip("/") + path
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -30,3 +30,11 @@ async def openai_chat_completion(secret_data: Dict[str, Any], payload: Dict[str,
         except Exception:
             data = {"raw": resp.text}
         return resp.status_code, data
+
+
+async def openai_chat_completion(secret_data: Dict[str, Any], payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    return await _openai_post("/chat/completions", secret_data, payload)
+
+
+async def openai_embeddings(secret_data: Dict[str, Any], payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    return await _openai_post("/embeddings", secret_data, payload)

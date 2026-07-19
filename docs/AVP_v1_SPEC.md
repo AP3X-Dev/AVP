@@ -43,6 +43,7 @@ for the service and environment is used.
 Control plane endpoints
 
 - POST /agents, GET /agents, POST /agents/{agent_id}/tokens
+- GET /tokens, POST /tokens/{token_id}/revoke — token inventory and revocation
 - POST /secrets, GET /secrets, DELETE /secrets (soft delete)
 - GET /sessions, POST /sessions/{session_id}/revoke
 - GET /audit — principal-scoped audit log (filter by event_type, session_id)
@@ -51,13 +52,21 @@ Control plane endpoints
 
 Proxy adapters
 
-- openai: `chat` (Chat Completions)
+- openai: `chat` (Chat Completions), `embeddings` (Embeddings)
 - anthropic: `messages` (Messages API)
 
 The agent never receives the underlying API key in proxy_only mode.
 
+Key rotation
+
+Every secret version records the key_version it was encrypted under. Configure
+`AVP_DEK_KEYRING_B64` as a JSON map of key_version -> base64 DEK and set
+`AVP_KEY_VERSION` to the version new writes should use; older versions remain
+decryptable. To rotate: add the new key to the keyring, bump AVP_KEY_VERSION,
+restart. Re-encrypt old versions at your leisure by re-saving secrets.
+
 MVP constraints
 
-- Secrets are encrypted using AES GCM with a local DEK from AVP_DEK_B64
-  (wrap the DEK with a real KMS in production; the key provider is pluggable)
+- Secrets are encrypted using AES GCM with local DEKs
+  (wrap the DEKs with a real KMS in production; the key provider is pluggable)
 - Rate limiting is in-memory per server process

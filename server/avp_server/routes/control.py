@@ -198,6 +198,63 @@ def create_agent_token(agent_id: str, req: CreateAgentTokenRequest, request: Req
     return CreateAgentTokenResponse(agent_id=agent_id, token=token)
 
 
+class TokenListItem(BaseModel):
+    token_id: int
+    token_type: str
+    agent_id: Optional[str] = None
+    created_at: str
+    expires_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+
+
+@router.get("/tokens", response_model=List[TokenListItem])
+def list_tokens(principal=Depends(require_principal), conn=Depends(get_conn)):
+    """List API tokens for the authenticated principal (metadata only, never the token)."""
+    pid = principal["principal_id"]
+    rows = fetchall(conn, """
+        SELECT t.id, t.token_type, a.agent_id, t.created_at, t.expires_at, t.revoked_at
+        FROM api_tokens t
+        LEFT JOIN agents a ON a.id = t.agent_id
+        WHERE t.principal_id = %s
+        ORDER BY t.created_at DESC
+    """, [pid])
+    return [TokenListItem(
+        token_id=r["id"],
+        token_type=r["token_type"],
+        agent_id=r["agent_id"],
+        created_at=r["created_at"].isoformat(),
+        expires_at=r["expires_at"].isoformat() if r["expires_at"] else None,
+        revoked_at=r["revoked_at"].isoformat() if r["revoked_at"] else None,
+    ) for r in rows]
+
+
+class RevokeTokenRequest(BaseModel):
+    reason: str = "revoked"
+
+
+@router.post("/tokens/{token_id}/revoke")
+def revoke_token(token_id: int, req: RevokeTokenRequest, request: Request, principal=Depends(require_principal), conn=Depends(get_conn)):
+    """Revoke an API token. Revoked tokens fail authentication immediately."""
+    pid = principal["principal_id"]
+    row = fetchone(conn, "SELECT id, token_type, revoked_at FROM api_tokens WHERE id = %s AND principal_id = %s", [token_id, pid])
+    if not row:
+        raise HTTPException(status_code=404, detail="token not found")
+    if row["revoked_at"] is not None:
+        return {"ok": True, "already_revoked": True}
+
+    # A principal must not lock itself out by revoking the token it is using
+    if row["id"] == principal["id"]:
+        raise HTTPException(status_code=400, detail="cannot revoke the token used for this request")
+
+    execute(conn, "UPDATE api_tokens SET revoked_at = now(), revoked_reason = %s WHERE id = %s", [req.reason, token_id])
+    audit_event(conn, principal_id=pid, agent_db_id=None, session_db_id=None, session_id=None,
+                event_type="token_revoked", metadata={"token_id": token_id, "token_type": row["token_type"], "reason": req.reason},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"))
+    conn.commit()
+    return {"ok": True}
+
+
 class UpsertSecretRequest(BaseModel):
     service_name: str
     label: str

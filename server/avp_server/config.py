@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     dek_b64: str = ""
     key_version: str = "local-1"
 
+    # Key rotation: JSON map of key_version -> base64 DEK, e.g.
+    # {"local-1": "<b64>", "local-2": "<b64>"}. key_version selects which
+    # entry encrypts new data; old entries remain available for decryption.
+    # dek_b64 (if set) is merged in under key_version for backward compat.
+    dek_keyring_b64: str = ""
+
     # Security: ephemeral keys are dangerous outside dev
     # In production (dev_mode=False), ephemeral is never allowed
     # In dev mode, ephemeral is only allowed if this is explicitly True
