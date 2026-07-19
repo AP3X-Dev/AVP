@@ -57,6 +57,14 @@ Proxy adapters
 
 The agent never receives the underlying API key in proxy_only mode.
 
+Streaming
+
+Setting `"stream": true` in the proxy_call payload for `openai chat` or
+`anthropic messages` relays the provider's SSE stream back verbatim
+(Content-Type passthrough, `x-avp-request-id` header). Upstream errors return
+a normal proxy_result envelope instead of a stream. Both SDKs expose this as
+`proxy_call_stream` / `proxyCallStream`.
+
 Key rotation
 
 Every secret version records the key_version it was encrypted under. Configure
@@ -65,8 +73,14 @@ Every secret version records the key_version it was encrypted under. Configure
 decryptable. To rotate: add the new key to the keyring, bump AVP_KEY_VERSION,
 restart. Re-encrypt old versions at your leisure by re-saving secrets.
 
+AWS KMS key provider
+
+Set `AVP_KEY_PROVIDER=aws_kms` to keep only KMS-wrapped DEKs in the
+environment; the server unwraps them via KMS Decrypt at startup (requires
+`pip install 'avp-server[aws]'` and AWS credentials). Generate a wrapped DEK
+with `python server/scripts/wrap_dek.py --kms-key-id alias/avp`. Rotation uses
+`AVP_KMS_WRAPPED_KEYRING_B64`, a JSON map of key_version -> wrapped DEK.
+
 MVP constraints
 
-- Secrets are encrypted using AES GCM with local DEKs
-  (wrap the DEKs with a real KMS in production; the key provider is pluggable)
 - Rate limiting is in-memory per server process

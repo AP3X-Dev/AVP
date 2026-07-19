@@ -186,7 +186,15 @@ def _get_key_provider() -> LocalEnvKeyProvider:
     """Get or initialize the key provider singleton."""
     global _key_provider
     if _key_provider is None:
-        _key_provider = LocalEnvKeyProvider.from_settings()
+        if settings.key_provider == "aws_kms":
+            from .kms import load_kms_keyring
+            _key_provider = load_kms_keyring()
+        elif settings.key_provider == "local":
+            _key_provider = LocalEnvKeyProvider.from_settings()
+        else:
+            raise KeyProviderError(
+                f"unknown AVP_KEY_PROVIDER '{settings.key_provider}' (expected: local, aws_kms)"
+            )
     return _key_provider
 
 

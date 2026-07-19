@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     # dek_b64 (if set) is merged in under key_version for backward compat.
     dek_keyring_b64: str = ""
 
+    # Key provider: "local" (DEKs from env) or "aws_kms" (env holds
+    # KMS-wrapped DEKs, unwrapped via KMS Decrypt at startup)
+    key_provider: str = "local"
+    kms_key_id: str = ""
+    kms_wrapped_dek_b64: str = ""
+    # JSON map of key_version -> base64 KMS-wrapped DEK (rotation)
+    kms_wrapped_keyring_b64: str = ""
+
     # Security: ephemeral keys are dangerous outside dev
     # In production (dev_mode=False), ephemeral is never allowed
     # In dev mode, ephemeral is only allowed if this is explicitly True

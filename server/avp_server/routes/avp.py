@@ -5,7 +5,9 @@ import secrets
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from psycopg.rows import dict_row
 
 from ..deps import get_conn, require_agent, require_session
@@ -15,8 +17,8 @@ from ..auth import new_token, token_sha256, hash_token
 from ..policy import intersect_capabilities
 from ..crypto import decrypt_json
 from ..services.registry import get_service_spec, format_env, operation_allowed
-from ..services.openai_proxy import openai_chat_completion, openai_embeddings
-from ..services.anthropic_proxy import anthropic_messages
+from ..services.openai_proxy import openai_chat_completion, openai_embeddings, openai_chat_target
+from ..services.anthropic_proxy import anthropic_messages, anthropic_messages_target
 from ..audit import audit_event
 from ..rate_limit import rate_limiter
 from ..session_utils import assert_valid_handle, _avp_error, _iso
@@ -29,6 +31,13 @@ PROXY_ADAPTERS = {
     ("openai", "chat"): openai_chat_completion,
     ("openai", "embeddings"): openai_embeddings,
     ("anthropic", "messages"): anthropic_messages,
+}
+
+# Operations that support SSE streaming when payload has stream=true.
+# Each value builds (url, headers) for the upstream request.
+STREAM_TARGETS = {
+    ("openai", "chat"): openai_chat_target,
+    ("anthropic", "messages"): anthropic_messages_target,
 }
 
 
@@ -277,6 +286,12 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
 
     request_id = "req_" + secrets.token_urlsafe(16)
 
+    if msg.payload.get("stream"):
+        return await _proxy_call_streaming(
+            conn, request, msg, session, service, secret_data, request_id,
+            principal_id=principal_id, agent_db_id=agent_db_id, session_db_id=session_db_id,
+        )
+
     adapter = PROXY_ADAPTERS.get((service, msg.operation))
     try:
         if adapter:
@@ -305,6 +320,83 @@ async def proxy_call(msg: ProxyCall, request: Request, session=Depends(require_s
     )
     conn.commit()
     return result
+
+
+async def _proxy_call_streaming(conn, request: Request, msg: ProxyCall, session, service: str,
+                                secret_data: Dict[str, Any], request_id: str, *,
+                                principal_id, agent_db_id, session_db_id):
+    """Stream an upstream SSE response back to the agent verbatim.
+
+    The audit event is written and committed before streaming starts, since the
+    request connection is released once the response begins.
+    """
+    target_builder = STREAM_TARGETS.get((service, msg.operation))
+    if target_builder is None:
+        return JSONResponse(status_code=200, content=ProxyResult(
+            request_id=request_id, status="error",
+            error=ProxyError(code="stream_not_supported", message="streaming not supported for this operation"),
+        ).model_dump())
+
+    target = target_builder(secret_data)
+    if target is None:
+        return JSONResponse(status_code=200, content=ProxyResult(
+            request_id=request_id, status="error",
+            error=ProxyError(code="internal_error", message="missing api_key in secret"),
+        ).model_dump())
+    url, headers = target
+
+    audit_event(
+        conn,
+        principal_id=principal_id,
+        agent_db_id=agent_db_id,
+        session_db_id=session_db_id,
+        session_id=msg.session_id,
+        event_type="proxy_call",
+        service_name=service,
+        request_id=request_id,
+        metadata={"operation": msg.operation, "status": "stream", "stream": True},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    conn.commit()
+
+    # ponytail: generous fixed timeout; make configurable if long generations exceed it
+    client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+    try:
+        upstream_req = client.build_request("POST", url, headers=headers, json=msg.payload)
+        upstream = await client.send(upstream_req, stream=True)
+    except Exception as e:
+        await client.aclose()
+        return JSONResponse(status_code=200, content=ProxyResult(
+            request_id=request_id, status="error",
+            error=ProxyError(code="proxy_failure", message=str(e)),
+        ).model_dump())
+
+    if upstream.status_code >= 300:
+        body = await upstream.aread()
+        await upstream.aclose()
+        await client.aclose()
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {"raw": body.decode(errors="replace")}
+        message = str(data.get("error", {}).get("message", "proxy error")) if isinstance(data, dict) else "proxy error"
+        return JSONResponse(status_code=200, content=ProxyResult(
+            request_id=request_id, status="error",
+            error=ProxyError(code="proxy_failure", message=message),
+            result=data if isinstance(data, dict) else {"raw": str(data)},
+        ).model_dump())
+
+    async def _relay():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    media_type = upstream.headers.get("content-type", "text/event-stream")
+    return StreamingResponse(_relay(), media_type=media_type, headers={"x-avp-request-id": request_id})
 
 
 @router.post("/session_revoke")

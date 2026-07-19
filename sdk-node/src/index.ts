@@ -80,4 +80,25 @@ export class AVPClient {
       payload
     }, sessionToken);
   }
+
+  /** Proxy a streaming call. Returns the raw SSE byte stream from the provider. */
+  async proxyCallStream(sessionToken: string, sessionId: string, handle: string, operation: string, payload: Record<string, any>): Promise<AsyncIterable<Uint8Array>> {
+    const res = await request(this.baseUrl + "/avp/proxy_call", {
+      method: "POST",
+      headers: { "content-type": "application/json", "authorization": `Bearer ${sessionToken}` },
+      body: JSON.stringify({
+        avp_version: "1.0",
+        type: "proxy_call",
+        session_id: sessionId,
+        capability_handle: handle,
+        operation,
+        payload: { ...payload, stream: true }
+      })
+    });
+    if (res.statusCode >= 400) {
+      const text = await res.body.text();
+      throw new Error(`HTTP ${res.statusCode}: ${text}`);
+    }
+    return res.body;
+  }
 }

@@ -72,6 +72,29 @@ class AVPClient:
             resp.raise_for_status()
             return resp.json()
 
+    def proxy_call_stream(self, session_token: str, session_id: str, handle: str, operation: str, payload: Dict[str, Any]):
+        """Proxy a streaming call; yields raw SSE lines from the upstream provider.
+
+        Sets stream=true in the payload. Iterate the result to consume the stream:
+
+            for line in client.proxy_call_stream(tok, sid, handle, "chat", {...}):
+                ...
+        """
+        body = {
+            "avp_version": "1.0",
+            "type": "proxy_call",
+            "session_id": session_id,
+            "capability_handle": handle,
+            "operation": operation,
+            "payload": {**payload, "stream": True}
+        }
+        headers = {"Authorization": f"Bearer {session_token}"}
+        with httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            with client.stream("POST", self._url("/avp/proxy_call"), json=body, headers=headers) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    yield line
+
     @staticmethod
     def install_env(env_map: Dict[str, Any]) -> None:
         for k, v in env_map.items():
