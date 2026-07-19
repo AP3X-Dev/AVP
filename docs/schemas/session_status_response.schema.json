@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "Capability": {
+      "additionalProperties": false,
+      "description": "Capability grant for a service.",
+      "properties": {
+        "environment": {
+          "enum": [
+            "dev",
+            "staging",
+            "prod"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "mode": {
+          "default": "both",
+          "enum": [
+            "secret_resolution",
+            "proxy_only",
+            "both"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "scopes",
+        "environment"
+      ],
+      "title": "Capability",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Response containing session status.",
+  "properties": {
+    "active": {
+      "title": "Active",
+      "type": "boolean"
+    },
+    "avp_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "enum": [
+        "1.0"
+      ],
+      "title": "Avp Version",
+      "type": "string"
+    },
+    "expires_at": {
+      "title": "Expires At",
+      "type": "string"
+    },
+    "granted_capabilities": {
+      "items": {
+        "$ref": "#/$defs/Capability"
+      },
+      "title": "Granted Capabilities",
+      "type": "array"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "session_status_response",
+      "default": "session_status_response",
+      "enum": [
+        "session_status_response"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "active",
+    "expires_at",
+    "granted_capabilities"
+  ],
+  "title": "SessionStatusResponse",
+  "type": "object"
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Request to proxy an API call through AVP.",
+  "properties": {
+    "avp_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "enum": [
+        "1.0"
+      ],
+      "title": "Avp Version",
+      "type": "string"
+    },
+    "capability_handle": {
+      "title": "Capability Handle",
+      "type": "string"
+    },
+    "operation": {
+      "title": "Operation",
+      "type": "string"
+    },
+    "payload": {
+      "title": "Payload",
+      "type": "object"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "proxy_call",
+      "default": "proxy_call",
+      "enum": [
+        "proxy_call"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "capability_handle",
+    "operation"
+  ],
+  "title": "ProxyCall",
+  "type": "object"
+}

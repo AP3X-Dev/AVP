@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Request to revoke a session.",
+  "properties": {
+    "avp_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "enum": [
+        "1.0"
+      ],
+      "title": "Avp Version",
+      "type": "string"
+    },
+    "reason": {
+      "default": "revoked",
+      "title": "Reason",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "session_revoke",
+      "default": "session_revoke",
+      "enum": [
+        "session_revoke"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "title": "SessionRevoke",
+  "type": "object"
+}

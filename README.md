@@ -4,7 +4,16 @@
 
 # Agent Vault Protocol (AVP)
 
-This repo contains a working MVP reference implementation of AVP v1.0.
+This repo contains the AVP 1.0 specification and its reference implementation.
+
+- **Specification:** [docs/AVP_v1_SPEC.md](docs/AVP_v1_SPEC.md) — the wire
+  protocol, capability model, session lifecycle, error registry, and security
+  requirements. Where spec and code disagree, the spec wins.
+- **Message schemas:** [docs/schemas/](docs/schemas/) — JSON Schema for every
+  wire message (CI fails if they drift from the implementation).
+- **Conformance suite:** `python server/scripts/conformance.py --url <vault>
+  --principal-token <ptk>` — runnable against any vault claiming AVP 1.0
+  conformance. CI runs it against this implementation on every push.
 
 What is included
 

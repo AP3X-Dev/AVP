@@ -1,95 +1,293 @@
-# AVP v1.0 (MVP reference)
+# Agent Vault Protocol — Version 1.0
 
-This document describes what the code in this repo implements.
+**Status:** Draft specification. The implementation in this repository is the
+reference implementation; where they disagree, this document wins and the
+implementation has a bug.
 
-Actors
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
+interpreted as described in RFC 2119.
 
-- Principal: owner of a vault, controls secrets and agent policies
-- Agent: a client process that requests capabilities and then resolves secrets or uses proxy calls
-- Vault: the AVP server, stores encrypted secrets and issues scoped sessions
+---
 
-Tokens
+## 1. Purpose and scope
 
-- Principal token: bearer token used for control plane endpoints
-- Agent token: bearer token tied to a single agent under a principal
-- Session token: short lived bearer token issued during agent_hello
+AVP defines how an autonomous **agent** obtains scoped, short-lived,
+revocable access to third-party service credentials held by a **vault** on
+behalf of a **principal** — without the agent ever holding long-lived
+credentials, and optionally without the agent ever seeing a credential at all.
 
-Capability
+This document specifies the wire protocol: message formats, the capability
+model, session lifecycle, error handling, and versioning. It does not mandate
+a storage design, encryption scheme, or deployment topology; those are vault
+implementation concerns (see §10 for the security properties a vault MUST
+nonetheless uphold).
 
-A capability is a tuple:
+## 2. Actors and trust model
 
-- service
-- scopes (subset)
-- environment
-- optional resource (maps to the secret's label — see Label binding)
-- mode: secret_resolution, proxy_only, or both
+- **Principal** — the human or organization that owns credentials and defines
+  policy. Trusts the vault fully. Does not trust agents beyond the policy it
+  grants them.
+- **Agent** — a client process acting for a principal. Untrusted by default;
+  everything it can do is bounded by capability grants.
+- **Vault** — the server implementing this protocol. Holds credentials,
+  enforces policy, issues sessions, records audit events.
 
-Flow
+## 3. Transport
 
-1. Principal creates agent and agent token
-2. Agent calls /avp/agent_hello with requested capabilities
-3. Vault intersects requested capabilities with the agent token session template
-4. Vault issues a session and returns a session token plus capability handles for proxy calls
-5. Agent calls /avp/resolve_secrets to receive a secret bundle (if allowed)
-6. Agent calls /avp/proxy_call to perform a remote operation (if allowed)
+- Messages are JSON objects exchanged over HTTP. Production deployments MUST
+  use TLS.
+- Authentication is via `Authorization: Bearer <token>` headers.
+- Data-plane endpoints (§7) are rooted at `/avp/`. Control-plane paths (§8)
+  are RECOMMENDED shapes, not wire-normative.
 
-Label binding
+## 4. Tokens
 
-The `resource` field of a capability selects the secret whose `label` matches it
-exactly (per service and environment). If `resource` is absent, the request is
-rejected unless `AVP_ALLOW_LABEL_FALLBACK=true`, in which case the newest secret
-for the service and environment is used.
+Three bearer token classes exist. A vault MUST NOT accept a token of one
+class where another is required.
 
-Control plane endpoints
+| Class | Prefix (RECOMMENDED) | Held by | Lifetime |
+|---|---|---|---|
+| Principal token | `ptk_` | principal | long-lived, revocable |
+| Agent token | `agt_` | agent process | long-lived or expiring, revocable |
+| Session token | `stk_` | agent, per session | short-lived (bounded, see §7.1), revocable |
 
-- POST /agents, GET /agents, POST /agents/{agent_id}/tokens
-- GET /tokens, POST /tokens/{token_id}/revoke — token inventory and revocation
-- POST /secrets, GET /secrets, DELETE /secrets (soft delete)
-- GET /secrets/versions — version history (metadata only)
-- POST /secrets/rollback — roll back to an earlier version (appends a new
-  version carrying the old ciphertext; history stays intact)
-- GET /sessions, POST /sessions/{session_id}/revoke
-- GET /audit — principal-scoped audit log (filter by event_type, session_id)
-- GET /services — service registry discovery
-- GET /dashboard — self-contained web console (principal token entered in the
-  browser; talks to the same-origin control API, no CORS, no server session)
-- POST /dev/bootstrap_principal (dev mode), POST /admin/bootstrap_principal (one-time token)
+Vaults MUST store tokens only in hashed form and MUST be able to revoke any
+token with immediate effect (revocation checked on every request).
 
-Proxy adapters
+## 5. The capability model
 
-- openai: `chat` (Chat Completions), `embeddings` (Embeddings)
-- anthropic: `messages` (Messages API)
+A **capability** is the unit of grant:
 
-The agent never receives the underlying API key in proxy_only mode.
+```json
+{
+  "service":     "openai",          // service identifier from the vault's registry
+  "scopes":      ["chat"],          // operation classes, subset semantics
+  "environment": "prod",            // one of: dev, staging, prod
+  "resource":    "default",         // credential label binding, nullable
+  "mode":        "both"             // secret_resolution | proxy_only | both
+}
+```
 
-Streaming
+- `resource` binds the capability to the credential with the matching label
+  for that service and environment (**label binding**). When `resource` is
+  null, the vault MUST reject resolution unless it is explicitly configured
+  to fall back to a default credential.
+- `mode` limits how the capability may be exercised: receiving credential
+  material (`secret_resolution`), making vault-mediated calls without ever
+  receiving material (`proxy_only`), or either (`both`).
 
-Setting `"stream": true` in the proxy_call payload for `openai chat` or
-`anthropic messages` relays the provider's SSE stream back verbatim
-(Content-Type passthrough, `x-avp-request-id` header). Upstream errors return
-a normal proxy_result envelope instead of a stream. Both SDKs expose this as
-`proxy_call_stream` / `proxyCallStream`.
+### 5.1 Intersection algorithm (normative)
 
-Key rotation
+A session's granted capabilities are the intersection of what the agent
+requested with what the agent's token template allows. For each requested
+capability R, evaluated against each allowed capability A with the same
+`(service, environment)` pair, the first A that satisfies all of the
+following yields a grant:
 
-Every secret version records the key_version it was encrypted under. Configure
-`AVP_DEK_KEYRING_B64` as a JSON map of key_version -> base64 DEK and set
-`AVP_KEY_VERSION` to the version new writes should use; older versions remain
-decryptable. To rotate: add the new key to the keyring, bump AVP_KEY_VERSION,
-restart. Re-encrypt old versions at your leisure by re-saving secrets.
+1. `R.scopes ⊆ A.scopes`
+2. mode: if `A.mode = "both"`, granted mode is `R.mode`; otherwise granted
+   mode is `A.mode`, and R MUST have requested `A.mode` or `"both"`.
+3. resource: if `A.resource` is non-null, `R.resource` MUST equal it exactly;
+   if `A.resource` is null, `R.resource` MUST be null.
 
-AWS KMS key provider
+Requested capabilities with no satisfying A are silently dropped. If nothing
+is granted, the vault MUST reject session creation with `capability_denied`.
+A vault MUST NOT grant anything broader than the template allows.
 
-Set `AVP_KEY_PROVIDER=aws_kms` to keep only KMS-wrapped DEKs in the
-environment; the server unwraps them via KMS Decrypt at startup (requires
-`pip install 'avp-server[aws]'` and AWS credentials). Generate a wrapped DEK
-with `python server/scripts/wrap_dek.py --kms-key-id alias/avp`. Rotation uses
-`AVP_KMS_WRAPPED_KEYRING_B64`, a JSON map of key_version -> wrapped DEK.
+## 6. Message envelope
 
-Rate limiting
+Every data-plane message is a JSON object carrying:
 
-Proxy calls are limited per (session, service, operation). The default
-backend is Postgres (fixed 1-minute window counters — survives restarts and
-works across replicas); set `AVP_RATE_LIMIT_BACKEND=memory` for the
-per-process token bucket. `AVP_PROXY_RATE_LIMIT_PER_MINUTE` sets the limit
-(default 60).
+- `avp_version` — protocol version string, `"1.0"` for this document
+- `type` — message type name (snake_case)
+
+Message types defined by this version, with JSON Schemas in
+[`docs/schemas/`](schemas/):
+
+| `type` | Direction | Schema |
+|---|---|---|
+| `agent_hello` | agent → vault | `agent_hello.schema.json` |
+| `agent_session` | vault → agent | `agent_session.schema.json` |
+| `resolve_secrets` | agent → vault | `resolve_secrets.schema.json` |
+| `secret_bundle` | vault → agent | `secret_bundle.schema.json` |
+| `proxy_call` | agent → vault | `proxy_call.schema.json` |
+| `proxy_result` | vault → agent | `proxy_result.schema.json` |
+| `session_revoke` | agent → vault | `session_revoke.schema.json` |
+| `session_status_response` | vault → agent | `session_status_response.schema.json` |
+| `error` | vault → agent | `error.schema.json` |
+
+Vaults MUST reject messages containing fields not defined by the declared
+`avp_version` (see §11 for how this interacts with evolution).
+
+## 7. Data plane
+
+### 7.1 Session establishment — `POST /avp/agent_hello`
+
+The agent authenticates with its agent token and sends `agent_hello` naming
+its `agent_id` and requested capabilities. The vault MUST:
+
+1. Verify the token maps to the named agent (reject mismatches).
+2. Run the intersection algorithm (§5.1).
+3. Issue a session: an unguessable `session_id`, a session token, an
+   expiry (bounded by the template; vaults SHOULD cap sessions at 12 hours
+   and MUST enforce a minimum of 60 seconds), and — for each granted
+   capability whose mode permits proxying — an opaque **capability handle**.
+4. Record an audit event.
+
+The response is an `agent_session` message. `capability_handles` maps
+service name → handle.
+
+### 7.2 Secret resolution — `POST /avp/resolve_secrets`
+
+Authenticated by session token. The vault MUST verify the `session_id` in
+the message matches the session of the presented token. For each granted
+capability with a resolution-permitting mode (optionally filtered by the
+request), the vault selects the credential per label binding and returns a
+`secret_bundle` in the requested format:
+
+- `environment` — a flat map of environment-variable names to values
+- `json` — a map of service name to credential object
+
+Each resolution MUST be audited per service.
+
+### 7.3 Vault-mediated calls — `POST /avp/proxy_call`
+
+Authenticated by session token. The message names a `capability_handle`, an
+`operation`, and a provider `payload`. The vault MUST:
+
+1. Validate the handle belongs to this session and has not expired.
+2. Validate the operation is permitted by the handle's scopes.
+3. Enforce rate limits (limit-exceeded → `rate_limit_exceeded`).
+4. Attach the credential server-side and forward the call. The agent MUST
+   NOT receive the credential through this path.
+5. Audit the call with a `request_id` echoed in the response.
+
+The response is a `proxy_result`: `status` is `ok` or `error`; provider
+failures are carried in `error` (and `result` MAY carry the provider's error
+body). Vault-side failures during proxying MUST NOT leak credential material.
+
+**Streaming:** if the payload requests streaming (`"stream": true`) and the
+vault supports it for the operation, the vault relays the provider's SSE
+stream verbatim with the provider's content type and SHOULD expose the
+request id in an `x-avp-request-id` response header. If streaming is
+unsupported for the operation the vault MUST respond with a `proxy_result`
+error with code `stream_not_supported`. Upstream errors MUST be returned as a
+`proxy_result` error rather than a broken stream.
+
+### 7.4 Session revocation and status
+
+- `POST /avp/session_revoke` — revokes the presented session. After
+  revocation the session token MUST be rejected everywhere, immediately.
+- `GET /avp/session_status?session_id=…` — returns
+  `session_status_response` for the presented session.
+
+### 7.5 Session lifecycle
+
+```
+            agent_hello                     expiry reached
+  (none) ────────────────► ACTIVE ──────────────────────────► EXPIRED
+                             │
+                             │ session_revoke, or principal-side revocation
+                             ▼
+                          REVOKED
+```
+
+EXPIRED and REVOKED are terminal. A vault MUST reject session tokens for
+non-ACTIVE sessions with `session_expired` / `session_revoked` semantics
+(401 at authentication, or the corresponding error code where the session is
+referenced).
+
+## 8. Control plane (RECOMMENDED shapes)
+
+The control plane is principal-facing vault management. Its shapes are
+RECOMMENDED for interoperability of tooling but are not wire-normative:
+agents never depend on them. A conforming vault MUST provide equivalent
+functionality: agent registration, agent token issuance, credential
+write/list/delete, credential version history and rollback, session listing
+and revocation, token listing and revocation, and audit log retrieval scoped
+to the principal. Credential *values* MUST NOT be retrievable through any
+control-plane read.
+
+## 9. Errors
+
+Errors use the `error` message envelope:
+
+```json
+{ "avp_version": "1.0", "type": "error",
+  "code": "capability_denied", "message": "…", "details": { } }
+```
+
+`details` MAY include a `correlation_id` for support. Vaults MUST NOT leak
+internal details (stack traces, SQL, key material) in production errors.
+
+### 9.1 Error code registry (v1.0)
+
+| Code | Meaning |
+|---|---|
+| `validation_error` | request failed schema validation |
+| `invalid_request` | malformed request |
+| `capability_denied` | capability not granted / label binding unsatisfied |
+| `capability_expired` | capability handle expired |
+| `session_expired` | session past expiry |
+| `session_revoked` | session was revoked |
+| `secret_not_found` | no credential matches the binding |
+| `operation_not_allowed` | operation not permitted by scopes |
+| `rate_limit_exceeded` | too many requests |
+| `unknown_service` | service not in the vault's registry |
+| `stream_not_supported` | streaming requested for a non-streaming operation |
+| `proxy_failure` | upstream provider call failed |
+| `http_error` | generic HTTP-layer error |
+| `internal_error` | unexpected vault error |
+
+New codes may be added in minor versions; clients MUST treat unknown codes as
+non-retryable failures of their category (4xx vs 5xx).
+
+## 10. Security considerations
+
+- **Credential confinement.** In `proxy_only` mode the credential MUST NOT
+  appear in any response body, header, or stream visible to the agent.
+- **Token storage.** Vaults MUST store all tokens hashed with a
+  memory-hard or otherwise collision- and preimage-resistant scheme, and use
+  constant-time comparison for any fixed shared secrets.
+- **Encryption at rest.** Credential material MUST be encrypted at rest.
+  Vaults SHOULD support key rotation such that rotating the active key does
+  not orphan previously encrypted material.
+- **Audit.** Session creation, credential resolution, proxied calls, and all
+  revocations MUST be audited. Audit records MUST NOT contain credential
+  material.
+- **Least privilege by construction.** The intersection algorithm is the
+  only path to a grant; there MUST be no side channel that widens a session
+  beyond its agent token template.
+
+## 11. Versioning
+
+- `avp_version` is `MAJOR.MINOR`. This document defines `1.0`.
+- Vaults MUST reject messages whose `avp_version` they do not support with
+  `validation_error` (422).
+- MINOR revisions are additive: new message types, new optional response
+  fields, new error codes. Because vaults reject unknown *request* fields,
+  clients MUST NOT send fields beyond the version they declare.
+- MAJOR revisions may break compatibility and use a distinct version string.
+
+## 12. Conformance
+
+An implementation may claim AVP 1.0 conformance if it passes the conformance
+suite in [`server/scripts/conformance.py`](../server/scripts/conformance.py),
+which exercises, against a live vault:
+
+1. Session establishment and envelope shape (§6, §7.1)
+2. Intersection enforcement — scope escalation denied (§5.1)
+3. Session/token binding — mismatched `session_id` rejected (§7.2)
+4. Secret bundle formats (§7.2)
+5. Strict field validation — unknown fields rejected (§6)
+6. Error envelope shape and codes (§9)
+7. Immediate revocation (§7.4, §7.5)
+
+Run: `python server/scripts/conformance.py --url <vault> --principal-token <ptk>`
+(the suite creates and cleans up its own agent, credential, and sessions).
+
+---
+
+*The JSON Schemas in `docs/schemas/` are generated from the reference
+implementation's message models and are normative for message shapes; the
+reference repository's test suite fails if they drift.*

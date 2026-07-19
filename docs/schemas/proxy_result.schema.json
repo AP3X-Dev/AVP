@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "ProxyError": {
+      "additionalProperties": false,
+      "description": "Error information from a proxy call.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ProxyError",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Response from a proxy call.",
+  "properties": {
+    "avp_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "enum": [
+        "1.0"
+      ],
+      "title": "Avp Version",
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProxyError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "type": {
+      "const": "proxy_result",
+      "default": "proxy_result",
+      "enum": [
+        "proxy_result"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "status"
+  ],
+  "title": "ProxyResult",
+  "type": "object"
+}
