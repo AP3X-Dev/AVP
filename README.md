@@ -24,11 +24,12 @@ What is included
 5. Capability intersection, label binding, and session enforcement
 6. Secret resolution bundles (environment and json)
 7. Proxy calls for OpenAI Chat Completions and Anthropic Messages (proxy only mode)
-8. Principal-scoped audit log with query endpoint
-9. Web dashboard at /dashboard (sessions, audit trail, secrets, tokens — with revoke/rollback controls)
-10. CLI to replace .env workflows (secrets, agents, sessions, audit)
-11. Python and Node SDKs
-12. Example agent script
+8. TOTP codes minted inside the vault — the seed is non-resolvable and never leaves
+9. Principal-scoped audit log with query endpoint
+10. Web dashboard at /dashboard (sessions, audit trail, secrets, tokens — with revoke/rollback controls)
+11. CLI to replace .env workflows (secrets, agents, sessions, audit)
+12. Python and Node SDKs
+13. Example agent script
 
 ## Quickstart (Docker)
 

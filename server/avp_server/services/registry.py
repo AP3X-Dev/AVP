@@ -20,6 +20,15 @@ class ServiceSpec:
     credential_schema: Dict[str, Any]
     env_mapping: Dict[str, str]  # env var key -> credential field
     operations: Dict[str, str]   # operation name -> required scope
+    #: May this service's credential material ever leave the vault?
+    #:
+    #: Capability `mode` is an operator-configured per-grant setting, so it can
+    #: be misconfigured. Some credentials must never be released regardless of
+    #: any grant — a TOTP seed mints codes forever, so handing it over defeats
+    #: the point of minting them here. `resolvable = False` makes that a
+    #: server-side invariant: `resolve_secrets` skips the service outright, and
+    #: the credential is reachable only through `proxy_call`.
+    resolvable: bool = True
 
     def validate_secret(self, data: Dict[str, Any], allow_extra: bool = False) -> None:
         """Validate secret data against this service's credential schema.
@@ -49,6 +58,15 @@ class ServiceSpec:
                 if expected_type == "string" and not isinstance(value, str):
                     raise SecretValidationError(
                         f"field '{field_name}' must be a string for {self.name}",
+                        field=field_name
+                    )
+                # `bool` is a subclass of `int`, so reject it explicitly rather
+                # than silently accepting True as the integer 1.
+                if expected_type == "integer" and (
+                    isinstance(value, bool) or not isinstance(value, int)
+                ):
+                    raise SecretValidationError(
+                        f"field '{field_name}' must be an integer for {self.name}",
                         field=field_name
                     )
             elif not allow_extra:
@@ -92,9 +110,30 @@ ANTHROPIC_SPEC = ServiceSpec(
     }
 )
 
+TOTP_SPEC = ServiceSpec(
+    name="totp",
+    credential_schema={
+        # Base32 authenticator seed, as printed beside the QR code at enrolment.
+        "seed": {"type": "string", "required": True},
+        "digits": {"type": "integer", "required": False},
+        "period": {"type": "integer", "required": False},
+        "algorithm": {"type": "string", "required": False},
+        # Free-text, purely so an operator can tell two seeds apart in the UI.
+        "label": {"type": "string", "required": False},
+    },
+    # Empty by design, and belt-and-braces: `resolvable = False` already stops
+    # resolution before any formatting happens.
+    env_mapping={},
+    operations={
+        "code": "code",
+    },
+    resolvable=False,
+)
+
 _SERVICE_SPECS: Dict[str, ServiceSpec] = {
     "openai": OPENAI_SPEC,
     "anthropic": ANTHROPIC_SPEC,
+    "totp": TOTP_SPEC,
 }
 
 
@@ -144,6 +183,9 @@ def get_service_info(service: str) -> Optional[Dict[str, Any]]:
 
     return {
         "name": spec.name,
+        # Lets a client see, before it requests a capability, that this service
+        # will never yield material through resolution.
+        "resolvable": spec.resolvable,
         "credential_fields": list(spec.credential_schema.keys()),
         "required_fields": [
             k for k, v in spec.credential_schema.items()
