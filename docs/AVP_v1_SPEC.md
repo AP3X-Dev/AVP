@@ -150,6 +150,18 @@ request), the vault selects the credential per label binding and returns a
 
 Each resolution MUST be audited per service.
 
+**Non-resolvable services.** A service MAY declare that its credential
+material must never be released. For such a service the vault MUST omit it
+from the bundle in every format, regardless of the capability's `mode` — the
+declaration is a property of the service, so it holds even where a grant was
+misconfigured to permit resolution. Such a credential is reachable only
+through `proxy_call` (§7.3). Omission follows the same convention as an
+ungranted capability (§5.1): the service is dropped from the bundle rather
+than failing the request, so a mixed resolution still returns what it may.
+
+A vault SHOULD expose which services are resolvable through its service
+discovery surface, so a client can tell before requesting a capability.
+
 ### 7.3 Vault-mediated calls — `POST /avp/proxy_call`
 
 Authenticated by session token. The message names a `capability_handle`, an
@@ -173,6 +185,34 @@ request id in an `x-avp-request-id` response header. If streaming is
 unsupported for the operation the vault MUST respond with a `proxy_result`
 error with code `stream_not_supported`. Upstream errors MUST be returned as a
 `proxy_result` error rather than a broken stream.
+
+#### 7.3.1 Derived credentials
+
+Proxying is not limited to forwarding a call upstream. Where a stored secret's
+purpose is to *derive* a short-lived value, the vault SHOULD perform the
+derivation itself and return only the derived value, so the long-lived secret
+never crosses the wire.
+
+The `totp` service is the reference case. Its credential holds a base32 seed
+(`seed`, REQUIRED) plus optional `digits`, `period` and `algorithm`. The
+`code` operation returns an RFC 6238 one-time code:
+
+```json
+{ "code": "492039", "expires_in": 17, "period": 30, "digits": 6 }
+```
+
+`expires_in` is the whole seconds the code remains valid, so a caller can
+choose to wait for the next window rather than race the boundary.
+
+Two requirements make this meaningful rather than decorative:
+
+- The seed MUST be declared non-resolvable (§7.2). A seed mints codes
+  indefinitely, from anywhere, long after the session that obtained it was
+  revoked — releasing it would convert a 30-second credential back into an
+  unbounded one.
+- The vault MUST derive the value from its own clock and MUST ignore any
+  caller-supplied time in the payload, for the same reason: honouring one
+  would let an agent mint codes for arbitrary points in time.
 
 ### 7.4 Session revocation and status
 
@@ -246,6 +286,12 @@ non-retryable failures of their category (4xx vs 5xx).
 
 - **Credential confinement.** In `proxy_only` mode the credential MUST NOT
   appear in any response body, header, or stream visible to the agent.
+- **Confinement independent of grants.** Where a credential must never be
+  released at all, that MUST be enforced as a property of the service (§7.2)
+  rather than left to the capability's `mode`, which is per-grant operator
+  configuration and can therefore be set wrongly. Prefer deriving a
+  short-lived value in the vault (§7.3.1) over releasing the long-lived
+  secret that produces it.
 - **Token storage.** Vaults MUST store all tokens hashed with a
   memory-hard or otherwise collision- and preimage-resistant scheme, and use
   constant-time comparison for any fixed shared secrets.

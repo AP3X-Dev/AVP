@@ -19,6 +19,7 @@ from ..crypto import decrypt_json
 from ..services.registry import get_service_spec, format_env, operation_allowed
 from ..services.openai_proxy import openai_chat_completion, openai_embeddings, openai_chat_target
 from ..services.anthropic_proxy import anthropic_messages, anthropic_messages_target
+from ..services.totp import totp_code
 from ..audit import audit_event
 from ..config import settings
 from ..rate_limit import rate_limiter, allow_db
@@ -32,6 +33,7 @@ PROXY_ADAPTERS = {
     ("openai", "chat"): openai_chat_completion,
     ("openai", "embeddings"): openai_embeddings,
     ("anthropic", "messages"): anthropic_messages,
+    ("totp", "code"): totp_code,
 }
 
 # Operations that support SSE streaming when payload has stream=true.
@@ -179,8 +181,16 @@ def resolve_secrets(msg: ResolveSecrets, request: Request, session=Depends(requi
         if mode not in ("secret_resolution", "both"):
             continue
 
-        if not get_service_spec(service):
+        spec = get_service_spec(service)
+        if not spec:
             raise HTTPException(status_code=400, detail=_avp_error("unknown_service", f"unknown service {service}").model_dump())
+
+        # Some credentials must never leave the vault whatever the grant says
+        # (a TOTP seed mints codes forever). Skipping here — rather than trusting
+        # the capability's mode — keeps that true even for a misconfigured grant,
+        # and covers the `json` format, which returns the raw secret unmapped.
+        if not spec.resolvable:
+            continue
 
         # AVP-010/011: Select secret by label binding
         secret, error = _select_secret(conn, principal_id, service, environment, resource)
