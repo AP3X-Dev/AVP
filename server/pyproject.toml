@@ -24,7 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    "ruff>=0.6",
+    # Pinned: later releases enable rules this codebase predates, failing CI on unchanged code.
+    "ruff==0.12.12",
 ]
 aws = [
     "boto3>=1.34",
