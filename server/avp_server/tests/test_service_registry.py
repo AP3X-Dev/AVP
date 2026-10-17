@@ -10,6 +10,9 @@ from avp_server.services.registry import (
     get_registry_info,
     OPENAI_SPEC,
     ANTHROPIC_SPEC,
+    NANGO_SPEC,
+    format_env,
+    operation_allowed,
 )
 
 
@@ -73,9 +76,24 @@ class TestSecretValidation:
     def test_anthropic_missing_key(self):
         """Test that Anthropic spec requires api_key."""
         data = {"base_url": "https://api.anthropic.com"}
-        
+
         with pytest.raises(SecretValidationError):
             ANTHROPIC_SPEC.validate_secret(data)
+
+    def test_nango_requires_secret_key(self):
+        """Test that the Nango spec needs its secret key and accepts its other fields."""
+        NANGO_SPEC.validate_secret(
+            {"secret_key": "nango-sk", "encryption_key": "base64key", "server_url": "http://nango:3003"}
+        )
+        with pytest.raises(SecretValidationError) as exc_info:
+            NANGO_SPEC.validate_secret({"encryption_key": "base64key"})
+        assert exc_info.value.field == "secret_key"
+
+    def test_nango_is_resolution_only(self):
+        """Test that no proxy operation exists for Nango, so it can only be resolved."""
+        assert NANGO_SPEC.operations == {}
+        assert operation_allowed("nango", "proxy", ["proxy"]) is False
+        assert format_env("nango", {"secret_key": "nango-sk"}) == {"NANGO_SECRET_KEY": "nango-sk"}
 
 
 class TestServiceRegistry:

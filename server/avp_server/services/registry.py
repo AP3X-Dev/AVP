@@ -92,9 +92,28 @@ ANTHROPIC_SPEC = ServiceSpec(
     }
 )
 
+# Self-hosted Nango: the key that authorizes its API, the key that encrypts its stored OAuth
+# tokens, and where it answers. Resolution only: no operations, so no proxy calls; the client
+# that resolves it calls Nango itself, and customers' tokens stay in Nango.
+NANGO_SPEC = ServiceSpec(
+    name="nango",
+    credential_schema={
+        "secret_key": {"type": "string", "required": True},
+        "encryption_key": {"type": "string", "required": False},
+        "server_url": {"type": "string", "required": False},
+    },
+    env_mapping={
+        "NANGO_SECRET_KEY": "secret_key",
+        "NANGO_ENCRYPTION_KEY": "encryption_key",
+        "NANGO_SERVER_URL": "server_url",
+    },
+    operations={},
+)
+
 _SERVICE_SPECS: Dict[str, ServiceSpec] = {
     "openai": OPENAI_SPEC,
     "anthropic": ANTHROPIC_SPEC,
+    "nango": NANGO_SPEC,
 }
 
 
