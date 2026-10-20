@@ -11,6 +11,7 @@ from avp_server.services.registry import (
     OPENAI_SPEC,
     ANTHROPIC_SPEC,
     NANGO_SPEC,
+    COMPOSIO_SPEC,
     format_env,
     operation_allowed,
 )
@@ -94,6 +95,15 @@ class TestSecretValidation:
         assert NANGO_SPEC.operations == {}
         assert operation_allowed("nango", "proxy", ["proxy"]) is False
         assert format_env("nango", {"secret_key": "nango-sk"}) == {"NANGO_SECRET_KEY": "nango-sk"}
+
+    def test_composio_requires_api_key(self):
+        """Test that the Composio spec needs its project key and is resolution only."""
+        COMPOSIO_SPEC.validate_secret({"api_key": "composio-key"})
+        with pytest.raises(SecretValidationError) as exc_info:
+            COMPOSIO_SPEC.validate_secret({})
+        assert exc_info.value.field == "api_key"
+        assert operation_allowed("composio", "proxy", ["proxy"]) is False
+        assert format_env("composio", {"api_key": "composio-key"}) == {"COMPOSIO_API_KEY": "composio-key"}
 
 
 class TestServiceRegistry:
