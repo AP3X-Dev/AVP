@@ -110,10 +110,24 @@ NANGO_SPEC = ServiceSpec(
     operations={},
 )
 
+# Composio: the project key that authorizes its API. Resolution only, like Nango: the client
+# that resolves it calls Composio itself, and customers' tokens stay in Composio.
+COMPOSIO_SPEC = ServiceSpec(
+    name="composio",
+    credential_schema={
+        "api_key": {"type": "string", "required": True},
+    },
+    env_mapping={
+        "COMPOSIO_API_KEY": "api_key",
+    },
+    operations={},
+)
+
 _SERVICE_SPECS: Dict[str, ServiceSpec] = {
     "openai": OPENAI_SPEC,
     "anthropic": ANTHROPIC_SPEC,
     "nango": NANGO_SPEC,
+    "composio": COMPOSIO_SPEC,
 }
 
 
